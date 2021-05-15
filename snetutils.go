@@ -6,11 +6,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +336,17 @@ func NetIsOnlinePing(times, intervalsecs int, ifacenames ...string) bool {
 	return false
 }
 
+func IfaceIsPluged(ifacename string) bool {
+	if retbyte, err := ioutil.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", ifacename)); err == nil {
+		retstr := string(retbyte)
+		retstr = sutils.StringTrimLeftRightNewlineSpace(retstr)
+		if retstr == "1" {
+			return true
+		}
+	}
+	return false
+}
+
 func IfaceListHasInternet() (ifaces []string) {
 	ifaces = make([]string, 0)
 	interfaces, _ := net.Interfaces()
@@ -538,11 +553,12 @@ func NetGetStaticMac() string {
 
 func RouteTem(ifacename string, metric int) (err error) {
 	_, _, err = sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
+	        metric=%d;
 			gwip=$(nmcli dev show ${iface} | grep 'IP4.GATEWAY:' | grep -Poe '([0-9]+\.){3}[0-9]+')
 
 			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
 			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
-			route add default metric 200 ${gw} dev ${iface}`, ifacename), time.Second*5)
+			route add default metric ${metric} ${gw} dev ${iface}`, ifacename, metric), time.Second*5)
 	return err
 }
 
@@ -553,22 +569,22 @@ func RouteDefault(ifacename string) (err error) {
 			gw=$(echo -n "${einfo}" | awk '{print $2}')
 			gm=$(echo -n "${einfo}" | awk '{print $3}')
 			mt=$(echo -n "${einfo}" | awk '{print $5}')
-			
+
 			dif=$(echo -n "${deinfo}" | awk '{print $8}')
 
 			[[ $dif ]] && {
-			
+
    			[[ ${dif} =~ ${iface} ]] || {
 	   		   dgw=$(echo -n "${deinfo}" | awk '{print $2}')
 		   	   dgm=$(echo -n "${deinfo}" | awk '{print $3}')
-			   dmt=$(echo -n "${deinfo}" | awk '{print $5}')			
-			   [[ ${dgw} =~ '0.0.0.0' ]] && dgwconf="" || dgwconf="gw ${dgw}"			
+			   dmt=$(echo -n "${deinfo}" | awk '{print $5}')
+			   [[ ${dgw} =~ '0.0.0.0' ]] && dgwconf="" || dgwconf="gw ${dgw}"
 		       route del default metric ${dmt} dev ${dif}
-			   route add default metric 60 ${dgwconf} dev ${dif}			
+			   route add default metric 60 ${dgwconf} dev ${dif}
 			}
-			
+
 			}
-			
+
 			[[ ${gw} =~ '0.0.0.0' ]] && gwconf="" || gwconf="gw ${gw}"
 			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
 			ip link set dev ${iface}  up
@@ -1171,7 +1187,7 @@ func IpFlush(ifi string) error {
 
 func IpDhcpRenew(ifi string) error {
 	cmd2run := fmt.Sprintf("dhclient %s", ifi)
-	if _, errstd, err := sexec.ExecCommandShell(cmd2run, time.Second*10); err == nil {
+	if _, errstd, err := sexec.ExecCommandShell(cmd2run, time.Second*30); err == nil {
 		return nil
 	} else {
 		return fmt.Errorf("%s", string(errstd))
