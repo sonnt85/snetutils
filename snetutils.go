@@ -11,10 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +25,7 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 
+	"github.com/sonnt85/gonmmm"
 	wsdiscovery "github.com/sonnt85/gonvif/ws-discovery"
 	"github.com/sonnt85/gosutils/sexec"
 	"github.com/sonnt85/gosutils/sregexp"
@@ -1655,6 +1653,13 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 	}
 	wg.Wait()
 	//	log.Println("cameralist: ", cameralist)
-
 	return cameralist
+}
+
+func NMCreateHostPost(ifacename, conname, ssid, password string) error {
+	if gonmmm.NMConIsExist(conname) {
+		return fmt.Errorf("Hostpost is created")
+	}
+	_, err := gonmmm.NMRunCommand(fmt.Sprintf("con add type wifi ifname %s con-name %s autoconnect yes ssid %s password %s", ifacename, conname, ssid, password))
+	return err
 }
