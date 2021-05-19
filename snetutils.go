@@ -1660,6 +1660,6 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	if gonmmm.NMConIsExist(conname) {
 		return fmt.Errorf("Hostpost is created")
 	}
-	_, err := gonmmm.NMRunCommand(fmt.Sprintf("con add type wifi ifname %s con-name %s autoconnect yes ssid %s password %s", ifacename, conname, ssid, password))
+	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi hostpot ifname %s con-name %s  ssid %s password %s", ifacename, conname, ssid, password))
 	return err
 }
