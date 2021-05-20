@@ -20,8 +20,8 @@ import (
 
 	"github.com/IBM/netaddr"
 	"github.com/beevik/etree"
-	"github.com/mdlayher/arp"
 	log "github.com/sirupsen/logrus"
+	"github.com/sonnt85/gonetwork/arp"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 
