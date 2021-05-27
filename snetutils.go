@@ -82,11 +82,12 @@ func NetGetInterfaceIpv4Addr(interfaceName string) (addr string, err error) {
 
 var dnslist = []string{
 	"1.1.1.1", "1.0.0.1", //clouflare
-	"208.67.222.222", "208.67.220.220", //opendns server
-	"8.8.8.8", "8.8.4.4", //google
-	"8.26.56.26", "8.20.247.20", //comodo
-	"9.9.9.9", "149.112.112.112", //quad9
-	"64.6.64.6", "64.6.65.6"} // verisign
+	//	"208.67.222.222", "208.67.220.220", //opendns server
+	//	"8.8.8.8", "8.8.4.4", //google
+	//	"8.26.56.26", "8.20.247.20", //comodo
+	//	"9.9.9.9", "149.112.112.112", //quad9
+	//	"64.6.64.6", "64.6.65.6"
+} // verisign
 
 func ResolverDomain(domain string, debugflag ...bool) (addrs []string, err error) {
 	r := &net.Resolver{
@@ -142,7 +143,7 @@ func ServerIsLive(domain string, ifacenames ...string) bool {
 		tcpAddr = nil
 	}
 
-	d := net.Dialer{LocalAddr: tcpAddr, Timeout: time.Millisecond * 500}
+	d := net.Dialer{LocalAddr: tcpAddr, Timeout: time.Millisecond * 666}
 
 	if !strings.Contains(domain, "://") {
 		domain = "http://" + domain
@@ -285,7 +286,7 @@ func NetIsOnlineTcp(times, intervalsecs int, ifacenames ...string) bool {
 	ttk := time.NewTicker(time.Second * time.Duration(intervalsecs))
 	for i1 := 0; i1 < times; i1++ {
 		for i := 0; i < numDnsTest; i++ {
-			//			log.Warn("Ping interface ", ifacename)
+			//			log.Warn("Ping interface ", ifacename, dnslist[i])
 			if ServerIsLive(dnslist[i], ifacename) {
 				return true
 			} else {
@@ -365,7 +366,7 @@ func IsOnline(times, intervalsecs int) bool {
 	ttk := time.NewTicker(time.Second * time.Duration(intervalsecs))
 
 	for i1 := 0; i1 < times; i1++ {
-		if (len(GetPublicIp()) != 0) || (len(TimeGetUTCFromInternet()) != 0) || NetIsOnlineTcp(1, 1) {
+		if NetIsOnlineTcp(1, 1) || (len(GetPublicIp()) != 0) {
 			return true
 		}
 
@@ -391,44 +392,13 @@ func NetIsOnline(times, intervalsecs int, ifacenames ...string) bool {
 	for i := 0; i < times; i++ {
 		for i := 0; i < numDnsTest; i++ {
 			if len(ifacename) == 0 {
-				if (len(GetPublicIp()) != 0) || (len(TimeGetUTCFromInternet()) != 0) || NetIsOnlineTcp(1, 1) {
+				// || (len(TimeGetUTCFromInternet()) != 0
+				if NetIsOnlineTcp(1, 1) || (len(GetPublicIp()) != 0) {
 					return true
 				}
 			} else {
 				if NetIsOnlineTcp(1, 1, ifacename) {
 					return true
-				}
-			}
-		}
-
-		if times > 1 {
-			<-ttk.C
-		}
-	}
-	return false
-	//////////////////////////////////////////////////////////////////////////////////////////
-	timeout := time.Millisecond * 1000
-	//	if numDnsTest >= 4 {
-	//		numDnsTest = 4
-	//	}
-
-	for i1 := 0; i1 < times; i1++ {
-		for i := 0; i < numDnsTest; i++ {
-			cmd2run := fmt.Sprintf(`ping -c 1 %s`, dnslist[i])
-
-			if len(ifacename) != 0 {
-				cmd2run = fmt.Sprintf(`ping -c 1 -I %s %s`, ifacename, dnslist[i])
-				//								log.Warnf("Checking online on iface %s", ifacename)
-				//				log.Warn("Ping cmd ", cmd2run)
-			}
-			//			log.Warn("Ping cmd ", cmd2run)
-			stdo, stdr, err := sexec.ExecCommandShell(cmd2run, timeout)
-			//
-			if err == nil {
-				return true
-			} else {
-				if sutils.StringContainsI(ifacename, "ppp") {
-					log.Errorf("Ping [%s] result: [%s] [%s] [%v]", cmd2run, string(stdo), string(stdr), err)
 				}
 			}
 		}
@@ -558,6 +528,15 @@ func RouteTem(ifacename string, metric int) (err error) {
 			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
 			route add default metric ${metric} ${gw} dev ${iface}`, ifacename, metric), time.Second*5)
 	return err
+}
+
+func GetIfaceRouteDefault() (ifacename string) {
+	cmd := `diface=$(route -n | grep -e '^0.0.0.0' | sort -u -k5 -r | head -n 1 | grep -Poe '[^\s]+$')`
+	if stdou, _, err := sexec.ExecCommandShell(cmd, time.Millisecond*200); err != nil {
+		return ""
+	} else {
+		return sutils.StringTrimLeftRightNewlineSpace(string(stdou))
+	}
 }
 
 func RouteDefault(ifacename string) (err error) {
@@ -856,8 +835,6 @@ func TimeGetUTCFromInternet() (t string) { //get ntp protocol, then get http hea
 	}
 	return TimeGetUTCFromhttp() // get from header http
 }
-
-var syncOneCheck = false
 
 func GetOutboundIP(iface ...string) (string, error) {
 	if (len(iface) != 0) && (len(iface[0]) != 0) {
@@ -1232,10 +1209,15 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 
 	mask := net.IP(ipmask).String()
 
+	ipgws := []net.IP{}
 	ipgw := iptest.Mask(ipmask)
-	ipgw[len(ipgw)-1] = ipgw[len(ipgw)-1] | 1
 
-	gw := net.IP(ipgw).String()
+	for _, v := range []byte{1, 2, 22, 185} {
+		ipgw[len(ipgw)-1] = v
+		//		ipgw[len(ipgw)-1] = ipgw[len(ipgw)-1] | v
+		ipgws = append(ipgws, ipgw)
+	}
+
 	defer func() {
 		if !pass {
 			IpFlush(ifiname)
@@ -1245,38 +1227,44 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 	//	fmt.Println("Ip Check", ips)
 	for i := len(ips) - 1; i >= 0; i-- {
 		ip := ips[i]
-
-		if ip.String() == gw {
+		if func() bool {
+			for _, ipgw := range ipgws {
+				if ip.String() == net.IP(ipgw).String() {
+					return true
+				}
+			}
+			return false
+		}() {
 			continue
 		}
 
-		if err != nil {
-			continue
-		}
+		for _, ipgw := range ipgws {
+			gw := net.IP(ipgw).String()
 
-		if err := IpConfig(ip.String(), mask, gw, ifaces...); err == nil {
-			//			fmt.Println("Cheking ", ip.String(), ipgw)
-			ipcheckmac := ipgw
-			if mac, err := arp.PingMac(ipcheckmac, ifi); err == nil {
-				fmt.Printf("Gateway %s Mac -> %s", ipgw, mac)
-				for j := 2; j < len(ips); j++ {
-					ipcheck := ips[j]
-					fmt.Println("checking ", ipcheck.String(), ip.String(), ipgw)
-					if ipcheck.String() == ip.String() {
-						continue
-					}
-					if _, err := arp.PingMac(ipcheck, ifi, time.Millisecond*85); nil != err {
-						if err := IpConfig(ipcheck.String(), mask, gw, ifaces...); err == nil {
-							pass = true
-							return nil
+			if err := IpConfig(ip.String(), mask, gw, ifaces...); err == nil {
+				//			fmt.Println("Cheking ", ip.String(), ipgw)
+				if mac, err := arp.PingMac(ipgw, ifi, time.Millisecond*85); err == nil {
+					fmt.Printf("Gateway %s Mac -> %s", ipgw, mac)
+					for j := 2; j < len(ips); j++ {
+						ipcheck := ips[j]
+						fmt.Println("checking ", ipcheck.String(), ip.String(), ipgw)
+						if ipcheck.String() == ip.String() {
+							continue
+						}
+						if _, err := arp.PingMac(ipcheck, ifi, time.Millisecond*85); nil != err {
+							if err := IpConfig(ipcheck.String(), mask, gw, ifaces...); err == nil {
+								pass = true
+								return nil
+							}
 						}
 					}
+					//				return nil
 				}
-				//				return nil
 			}
-		} else {
-			fmt.Printf("IpConfig error %s: %s", ip.String(), err.Error())
 		}
+		//else {
+		//			fmt.Printf("IpConfig error %s: %s", ip.String(), err.Error())
+		//		}
 	}
 
 	return fmt.Errorf("Can not config %s", ipcidr)
@@ -1662,4 +1650,12 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	}
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi hotspot ifname %s con-name %s ssid %s password %s", ifacename, conname, ssid, password))
 	return err
+}
+
+func IfaceRestart(ifacname string) bool {
+	cmd2run := fmt.Sprintf("iface=%s; ip link set down  ${iface};  ip link set up ${iface}", ifacname)
+	if _, _, err := sexec.ExecCommandShell(cmd2run, time.Millisecond*5000); err == nil {
+		return true
+	}
+	return false
 }
