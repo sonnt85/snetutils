@@ -1327,7 +1327,7 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 					log.Warnf("Can not route (%s) [%s] %s", ipstr, cmd2run, string(stderr))
 				}
 				//for jetson only
-				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, maskstr, gwipstr)
+				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, cird, gwipstr)
 				if _, err := gonmmm.NMRunCommand(cmd2run); err != nil {
 					log.Debug("Cannot use nmcli to set ip ", err.Error())
 				}
