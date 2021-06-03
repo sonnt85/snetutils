@@ -1286,6 +1286,7 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 			}
 		}
 		cidrstr := ""
+		cirdbits := 0
 		if ip := net.ParseIP(ipstr); ip != nil {
 			if len(maskstr) == 0 || maskstr == "0.0.0.0" {
 				maskstr = net.IP(ip.DefaultMask()).String()
@@ -1306,8 +1307,8 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				gwipstr = net.IP(ipgw).String()
 			}
 
-			cird, _ := ipmask.Size()
-			cidrstr = fmt.Sprintf("%s/%d", ip.Mask(ipmask).String(), cird)
+			cirdbits, _ = ipmask.Size()
+			cidrstr = fmt.Sprintf("%s/%d", ip.Mask(ipmask).String(), cirdbits)
 		}
 		//IpParserCIDR(cidr)
 		//ip a add 192.168.1.200/255.255.255.0 dev eth0
@@ -1327,7 +1328,7 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 					log.Warnf("Can not route (%s) [%s] %s", ipstr, cmd2run, string(stderr))
 				}
 				//for jetson only
-				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, cird, gwipstr)
+				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, cirdbits, gwipstr)
 				if _, err := gonmmm.NMRunCommand(cmd2run); err != nil {
 					log.Debug("Cannot use nmcli to set ip ", err.Error())
 				}
