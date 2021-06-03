@@ -90,6 +90,10 @@ var dnslist = []string{
 } // verisign
 
 func ResolverDomain(domain string, debugflag ...bool) (addrs []string, err error) {
+	if addr := net.ParseIP(domain); addr != nil {
+		return []string{domain}, nil
+	}
+
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial:     nil,
@@ -820,18 +824,15 @@ var __ntpServer = []string{"0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org",
 
 func TimeGetUTCFromInternet() (t string) { //get ntp protocol, then get http header
 	for _, srv := range __ntpServer {
-		//		start := time.Now()
 		if dt, err := GetNetworkTime(srv, 123); err == nil {
-			//			fmt.Println("Usfed ntp server", srv, dt.UTC().String())
+			//			log.Debug("Usfed ntp server ", srv, dt.UTC().String())
 			tar := strings.Split(dt.UTC().String(), " ")
 			//			2021-03-11 01:49:58.968944707 +0000 UTC
 			//			for _, v := range tar {
-			//				fmt.Println(v)
+			//				log.Debug(v)
 			//			}
 			return fmt.Sprintf("%s %s", tar[0], tar[1])
 		}
-		//		elapsed := time.Since(start)
-		//		fmt.Printf("Binomial took %s", elapsed)
 	}
 	return TimeGetUTCFromhttp() // get from header http
 }
@@ -1325,6 +1326,11 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				if _, stderr, err := sexec.ExecCommandShell(cmd2run, time.Second*3); err != nil {
 					log.Warnf("Can not route (%s) [%s] %s", ipstr, cmd2run, string(stderr))
 				}
+				//for jetson only
+				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, maskstr, gwipstr)
+				if _, err := gonmmm.NMRunCommand(cmd2run); err != nil {
+					log.Debug("Cannot use nmcli to set ip ", err.Error())
+				}
 				return nil
 			} else {
 				if err := IpDhcpRenew(ifi); err == nil {
@@ -1501,7 +1507,7 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 			defer func() {
 				wg.Done()
 			}()
-			serviceInfo := NetDiscoveryQuery(servicename, time.Second*2, iface)
+			serviceInfo := NetDiscoveryQuery(servicename, time.Second*4, iface)
 			//		serviceInfo := NetDiscoveryQuery(servicename, time.Second*1, ifaceName...)
 			//			fmt.Printf("\n\n\nDiscoveryDevice\n%s\n%#v\n%#v\n", servicename, serviceInfo, iface)
 			for _, entry := range serviceInfo {
@@ -1645,10 +1651,31 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 }
 
 func NMCreateHostPost(ifacename, conname, ssid, password string) error {
+	//connection.autoconnect
 	if gonmmm.NMConIsExist(conname) {
-		return fmt.Errorf("Hostpost is created")
+		if pwd, err := gonmmm.NMRunCommand(fmt.Sprintf("-s -g 802-11-wireless-security.psk connection show %s", conname)); err == nil && pwd == password {
+			return fmt.Errorf("Hostpost is created")
+		} else {
+			_, err := gonmmm.NMRunCommand(fmt.Sprintf("modify %s 802-11-wireless-security.psk %s", conname, password))
+			return err
+		}
 	}
+
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi hotspot ifname %s con-name %s ssid %s password %s", ifacename, conname, ssid, password))
+	return err
+}
+
+func NMConnectWifi(ifacename, ssid, password string) error {
+	//connection.autoconnect
+	if gonmmm.NMConIsExist(ssid) {
+		if pwd, err := gonmmm.NMRunCommand(fmt.Sprintf("-s -g 802-11-wireless-security.psk connection show %s", ssid)); err == nil && pwd == password {
+			return fmt.Errorf("Hostpost is created")
+		} else {
+			_, err := gonmmm.NMRunCommand(fmt.Sprintf("modify %s 802-11-wireless-security.psk %s", ssid, password))
+			return err
+		}
+	}
+	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s  %s password %s", ssid, ifacename, password))
 	return err
 }
 
