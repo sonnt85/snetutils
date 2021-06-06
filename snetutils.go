@@ -60,6 +60,13 @@ func NetGetInterfaceIpv4Addr(interfaceName string) (addr string, err error) {
 	return ipv4Addr.String(), nil
 }
 
+func NetIfaceHasIpv4(interfaceName string) bool {
+	if _, err := NetGetInterfaceIpv4Addr(interfaceName); err == nil {
+		return true
+	}
+	return false
+}
+
 //func DetermineRouteInterface(serverAddr string) error {
 //	var ip net.IP
 //	if ip = net.ParseIP(serverAddr); ip == nil {
@@ -133,6 +140,54 @@ func ResolverDomain2Ip4(domain string, debugflag ...bool) (addr string, err erro
 	}
 }
 
+func NetCheckConectionToServer(domain string, ifacenames ...string) error {
+	tcpAddr := &net.TCPAddr{}
+
+	if len(ifacenames) != 0 {
+		ip4add, err := NetGetInterfaceIpv4Addr(ifacenames[0])
+		if err != nil || len(ip4add) == 0 {
+			return err
+		} else {
+			tcpAddr.IP = net.ParseIP(ip4add)
+		}
+	} else {
+		tcpAddr = nil
+	}
+
+	d := net.Dialer{LocalAddr: tcpAddr, Timeout: time.Millisecond * 2000}
+
+	if !strings.Contains(domain, "://") {
+		domain = "http://" + domain
+	}
+	u, err := url.Parse(domain)
+	if err != nil {
+		return err
+	}
+	port := "80"
+	if u.Scheme == "https" {
+		port = "443"
+	}
+
+	host := u.Host
+	if thost, tport, _ := net.SplitHostPort(u.Host); len(thost) != 0 {
+		port = tport
+		host = thost
+	}
+	ip4, err := ResolverDomain2Ip4(host)
+	if err != nil {
+		//		log.Error(err, host)
+
+		return err
+	}
+	if conn, err := d.Dial("tcp", ip4+":"+port); err != nil {
+		//		log.Error(err)
+		return err
+	} else {
+		conn.Close()
+		return nil
+	}
+}
+
 func ServerIsLive(domain string, ifacenames ...string) bool {
 	tcpAddr := &net.TCPAddr{}
 
@@ -182,92 +237,20 @@ func ServerIsLive(domain string, ifacenames ...string) bool {
 }
 
 func NetIsOnlineOld(times, intervalsecs int, ifacenames ...string) bool {
-	timeout := time.Millisecond * 5000
-	serversList := []string{
-		"https://icanhazip.com",
-		"http://ipecho.net/plain",
-		"http://ifconfig.me/ip",
-		"http://ifconfig.co",
-		"http://checkip.dyndns.org",
-		"https://www.google.com"}
-
-	tcpAddr := &net.TCPAddr{}
-	udpAddr := &net.UDPAddr{}
-
-	if len(ifacenames) != 0 {
-		ip4add, err := NetGetInterfaceIpv4Addr(ifacenames[0])
-		if err != nil || len(ip4add) == 0 {
-			return false
-		} else {
-			tcpAddr.IP = net.ParseIP(ip4add)
-			udpAddr.IP = tcpAddr.IP
-		}
-	} else {
-		tcpAddr = nil
-		udpAddr = nil
-	}
-
-	d := net.Dialer{LocalAddr: tcpAddr, Timeout: timeout}
-
+	ttk := time.NewTicker(time.Second * time.Duration(intervalsecs))
 	for i1 := 0; i1 < times; i1++ {
-		d.LocalAddr = udpAddr
 		for i := 0; i < len(dnslist); i++ {
-			if conn, err := d.Dial("udp", dnslist[i]+":53"); err != nil {
-				log.Println(err)
-				if times > 1 {
-					time.Sleep(time.Second * time.Duration(intervalsecs))
-				}
-				continue
-			} else {
-				fmt.Println("Use dns server:", dnslist[i])
-				conn.Close()
-				return true
-			}
-		}
-		continue
-		d.LocalAddr = tcpAddr
-		for i := 0; i < len(serversList); i++ {
-			tcpFunc := func() bool {
-				u, err := url.Parse(serversList[i])
-				if err != nil {
-					return false
-				}
-				port := "80"
-				if u.Scheme == "https" {
-					port = "443"
-				}
-				host := u.Host
-				if thost, tport, _ := net.SplitHostPort(u.Host); len(thost) != 0 {
-					port = tport
-					host = thost
-				}
-				ip4, err := ResolverDomain2Ip4(host)
-				if err != nil {
-					return false
-				}
-				if conn, err := d.Dial("tcp", ip4+":"+port); err != nil {
-					log.Println(err)
-					return false
-				} else {
-					conn.Close()
-					return true
-				}
-			}
-			if tcpFunc() {
-				return true
-			}
-
-			cmd2run := fmt.Sprintf(`curl -m 4 %s`, serversList[i])
+			cmd2run := fmt.Sprintf(`curl -m 2 %s`, dnslist[i])
 
 			if len(ifacenames) != 0 {
-				cmd2run = fmt.Sprintf(`curl -m 4  --interface %s %s`, ifacenames[0], serversList[i])
+				cmd2run = fmt.Sprintf(`curl -m 2  --interface %s %s`, ifacenames[0], dnslist[i])
 			}
-			if _, _, err := sexec.ExecCommandShell(cmd2run, time.Millisecond*5000); err == nil {
+			if _, _, err := sexec.ExecCommandShell(cmd2run, time.Millisecond*2100); err == nil {
 				return true
 			}
 
 			if times > 1 {
-				time.Sleep(time.Second * time.Duration(intervalsecs))
+				<-ttk.C
 			}
 		}
 	}
@@ -523,19 +506,32 @@ func NetGetStaticMac() string {
 	}
 }
 
-func RouteTem(ifacename string, metric int) (err error) {
-	_, _, err = sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
+func RouteTem(ifacename string, metrics ...int) (err error) {
+	metric := 185
+	if len(metrics) != 0 {
+		metric = metrics[0]
+	}
+	gwip, _ := NetGetDefaultGatewayOfIface(ifacename)
+	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
 	        metric=%d;
-			gwip=$(nmcli dev show ${iface} | grep 'IP4.GATEWAY:' | grep -Poe '([0-9]+\.){3}[0-9]+')
-
+			gwip=%s
+			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
 			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
 			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
-			route add default metric ${metric} ${gw} dev ${iface}`, ifacename, metric), time.Second*5)
-	return err
+			route add default metric ${metric} ${gw} dev ${iface}
+			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, metric, gwip), time.Second*5); err == nil {
+		return nil
+	} else {
+		return fmt.Errorf("%s", string(stderr))
+	}
+}
+
+func RouteDel(ifacename string, metrics ...int) {
+
 }
 
 func GetIfaceRouteDefault() (ifacename string) {
-	cmd := `diface=$(route -n | grep -e '^0.0.0.0' | sort -u -k5 -r | head -n 1 | grep -Poe '[^\s]+$')`
+	cmd := `route -n | grep -e '^0.0.0.0' | sort -u -k5 -g | head -n 1 | grep -Poe '[^\s]+$'`
 	if stdou, _, err := sexec.ExecCommandShell(cmd, time.Millisecond*200); err != nil {
 		return ""
 	} else {
@@ -543,10 +539,17 @@ func GetIfaceRouteDefault() (ifacename string) {
 	}
 }
 
-func RouteDefault(ifacename string) (err error) {
-	cmd := `iface=` + ifacename + `
-			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -r | head -n 1)
-			einfo=$(route -n | grep -e '^0.0.0.0' | sort -u -k2 -r  | grep -m 1 ${iface})
+func RouteDefault(ifacename string, metrics ...int) (err error) {
+	mt := 50
+	if len(metrics) != 0 {
+		mt = metrics[0]
+	}
+
+	cmd := fmt.Sprintf(`iface=%s
+	        nmt=%d
+	        route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
+			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -g | head -n 1)
+			einfo=$(route -n | grep -e '^0.0.0.0' | sort -u -k2 -g  | grep -m 1 ${iface})
 			gw=$(echo -n "${einfo}" | awk '{print $2}')
 			gm=$(echo -n "${einfo}" | awk '{print $3}')
 			mt=$(echo -n "${einfo}" | awk '{print $5}')
@@ -561,7 +564,7 @@ func RouteDefault(ifacename string) (err error) {
 			   dmt=$(echo -n "${deinfo}" | awk '{print $5}')
 			   [[ ${dgw} =~ '0.0.0.0' ]] && dgwconf="" || dgwconf="gw ${dgw}"
 		       route del default metric ${dmt} dev ${dif}
-			   route add default metric 60 ${dgwconf} dev ${dif}
+			   route add default metric $((nmt + 10)) ${dgwconf} dev ${dif}
 			}
 
 			}
@@ -569,8 +572,8 @@ func RouteDefault(ifacename string) (err error) {
 			[[ ${gw} =~ '0.0.0.0' ]] && gwconf="" || gwconf="gw ${gw}"
 			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
 			ip link set dev ${iface}  up
-			route add default metric 50 ${gwconf} dev ${iface}
-			route -n | grep ${iface} | grep 50`
+			route add default metric ${nmt} ${gwconf} dev ${iface}
+			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, mt)
 	if stdou, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
 		fmt.Errorf("\nCan not configure network for %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
 		return fmt.Errorf("%s", string(stderr))
@@ -1069,6 +1072,14 @@ func NetGetCIDR(iface ...string) (string, error) {
 	return NetGetInterfaceInfo(IfaceCidr, iface...)
 }
 
+func NetGetDefaultGatewayOfIface(iface ...string) (string, error) {
+	if stdout, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`ip r s dev %s | grep -m 1 -Poe 'via\s+[^\s]+' | sed -Ee 's/via\s+//g'`, iface), time.Second*3); err == nil {
+		return string(stdout), nil
+	} else {
+		return "", fmt.Errorf("%s", string(stderr))
+	}
+}
+
 func NetGetMask(iface ...string) (string, error) {
 	return NetGetInterfaceInfo(IfaceMask, iface...)
 }
@@ -1327,11 +1338,11 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				if _, stderr, err := sexec.ExecCommandShell(cmd2run, time.Second*3); err != nil {
 					log.Warnf("Can not route (%s) [%s] %s", ipstr, cmd2run, string(stderr))
 				}
-				//for jetson only
-				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, cirdbits, gwipstr)
-				if _, err := gonmmm.NMRunCommand(cmd2run); err != nil {
-					log.Debug("Cannot use nmcli to set ip ", err.Error())
-				}
+				//for jetson only, no longer needed
+				//				cmd2run = fmt.Sprintf(`nmcli connection modify "Wired connection 1" ipv4.method manual ipv4.addresses "%s/%s" ipv4.gateway %s`, ipstr, cirdbits, gwipstr)
+				//				if _, err := gonmmm.NMRunCommand(cmd2run); err != nil {
+				//					log.Debug("Cannot use nmcli to set ip ", err.Error())
+				//				}
 				return nil
 			} else {
 				if err := IpDhcpRenew(ifi); err == nil {
@@ -1590,15 +1601,27 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 			for _, j := range devices {
 				//				log.Println("\n\n\ndevice:" + j + "\n\n\n")
 				doc := etree.NewDocument()
+				if doc == nil {
+					continue
+				}
+
 				if err := doc.ReadFromString(j); err != nil {
 					//			context.String(http.StatusNotAcceptable, err.Error())
 					//					return
 				} else {
 					endpoints := doc.Root().FindElement("./Body/ProbeMatches/ProbeMatch/XAddrs")
+					if endpoints == nil {
+						continue
+					}
 					scopes := doc.Root().FindElement("./Body/ProbeMatches/ProbeMatch/Scopes")
+					if scopes == nil {
+						continue
+					}
 					urn := doc.Root().FindElement("./Body/ProbeMatches/ProbeMatch/EndpointReference/Address")
 					//				types := doc.Root().FindElement("./Body/ProbeMatches/ProbeMatch/Types")
-
+					if urn == nil {
+						continue
+					}
 					uuid := urn.Text()
 					uuid = sregexp.New(`[^:]+$`).FindString(uuid)
 					uuid = strings.ReplaceAll(sregexp.New(`[^:]+$`).FindString(uuid), "-", "")
@@ -1654,11 +1677,10 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	//connection.autoconnect
 	if gonmmm.NMConIsExist(conname) {
-		if pwd, err := gonmmm.NMRunCommand(fmt.Sprintf("-s -g 802-11-wireless-security.psk connection show %s", conname)); err == nil && pwd == password {
-			return fmt.Errorf("Hostpost is created")
+		if pwd := gonmmm.NMConGetField(conname, "802-11-wireless-security.psk"); pwd == password {
+			return nil
 		} else {
-			_, err := gonmmm.NMRunCommand(fmt.Sprintf("modify %s 802-11-wireless-security.psk %s", conname, password))
-			return err
+			return gonmmm.NMConModField(conname, "802-11-wireless-security.psk", password)
 		}
 	}
 
@@ -1669,11 +1691,10 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 func NMConnectWifi(ifacename, ssid, password string) error {
 	//connection.autoconnect
 	if gonmmm.NMConIsExist(ssid) {
-		if pwd, err := gonmmm.NMRunCommand(fmt.Sprintf("-s -g 802-11-wireless-security.psk connection show %s", ssid)); err == nil && pwd == password {
-			return fmt.Errorf("Hostpost is created")
+		if pwd := gonmmm.NMConGetField(ssid, "802-11-wireless-security.psk"); pwd == password {
+			return nil
 		} else {
-			_, err := gonmmm.NMRunCommand(fmt.Sprintf("modify %s 802-11-wireless-security.psk %s", ssid, password))
-			return err
+			return gonmmm.NMConModField(ssid, "802-11-wireless-security.psk", password)
 		}
 	}
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s  %s password %s", ssid, ifacename, password))
