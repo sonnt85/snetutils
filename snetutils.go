@@ -1164,7 +1164,7 @@ func IpGetDefault(ipstr string) (mask, gw string, err error) {
 }
 
 func IpFlush(ifi string) error {
-	cmd2run := fmt.Sprintf(`ifi=%s; for i in $(ip r show  dev ${ifi} | grep -oEe '^[^\s]+' ); do ip r del $i dev ${ifi}; done; ip addr flush dev ${ifi};`, ifi)
+	cmd2run := fmt.Sprintf(`ifi=%s; for i in $(ip r show  dev ${ifi} | grep -oPe '^[^\s]+' | sort -u -k1); do ip r del $i dev ${ifi}; done; ip addr flush dev ${ifi};`, ifi)
 	if _, errstd, err := sexec.ExecCommandShell(cmd2run, time.Second*5); err == nil {
 		return nil
 	} else {
