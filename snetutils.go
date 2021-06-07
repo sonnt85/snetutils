@@ -515,11 +515,11 @@ func RouteTem(ifacename string, metrics ...int) (err error) {
 	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
 	        metric=%d;
 			gwip=%s
-			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
+			route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${metric}$" && exit 0
 			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
 			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
 			route add default metric ${metric} ${gw} dev ${iface}
-			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, metric, gwip), time.Second*5); err == nil {
+			route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, metric, gwip), time.Second*5); err == nil {
 		return nil
 	} else {
 		return fmt.Errorf("%s", string(stderr))
@@ -547,7 +547,7 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 
 	cmd := fmt.Sprintf(`iface=%s
 	        nmt=%d
-	        route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
+	        route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
 			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -g | head -n 1)
 			einfo=$(route -n | grep -e '^0.0.0.0' | sort -u -k2 -g  | grep -m 1 ${iface})
 			gw=$(echo -n "${einfo}" | awk '{print $2}')
@@ -573,7 +573,7 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
 			ip link set dev ${iface}  up
 			route add default metric ${nmt} ${gwconf} dev ${iface}
-			route -n | grep -e '^0.0.0.0' | grep -v ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, mt)
+			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, mt)
 	if stdou, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
 		fmt.Errorf("\nCan not configure network for %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
 		return fmt.Errorf("%s", string(stderr))
@@ -1172,9 +1172,13 @@ func IpFlush(ifi string) error {
 	}
 }
 
-func IpDhcpRenew(ifi string) error {
-	cmd2run := fmt.Sprintf("dhclient %s", ifi)
-	if _, errstd, err := sexec.ExecCommandShell(cmd2run, time.Second*30); err == nil {
+func IpDhcpRenew(ifi string, timeouts ...time.Duration) error {
+	timeout := time.Second * 30
+	if len(timeouts) != 0 {
+		timeout = timeouts[0]
+	}
+	cmd2run := fmt.Sprintf("dhclient  %s", ifi)
+	if _, errstd, err := sexec.ExecCommandShell(cmd2run, timeout); err == nil {
 		return nil
 	} else {
 		return fmt.Errorf("%s", string(errstd))
@@ -1334,7 +1338,7 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				//ipOne = true ip route add ${cidr} via ${gw} dev ${ifi} ||
 				//				cmd2run = fmt.Sprintf("cidr=%s;gw=%s;ifi=%s; ip link set ${ifi} allmulticast on; ip link set ${ifi} allmulticast on; ip route add ${cidr} dev ${ifi}", cidrstr, gwipstr, ifi)
 
-				cmd2run = fmt.Sprintf("cidr=%s;gw=%s;ifi=%s; ip link set ${ifi} allmulticast on; ip link set ${ifi} allmulticast on; ip r a default dev ${ifi} via ${gw} metric 300", cidrstr, gwipstr, ifi)
+				cmd2run = fmt.Sprintf("cidr=%s;gw=%s;ifi=%s; ip link set ${ifi} allmulticast on; ip link set ${ifi} allmulticast on; ip r a default dev ${ifi} via ${gw} metric 1985", cidrstr, gwipstr, ifi)
 				if _, stderr, err := sexec.ExecCommandShell(cmd2run, time.Second*3); err != nil {
 					log.Warnf("Can not route (%s) [%s] %s", ipstr, cmd2run, string(stderr))
 				}
@@ -1677,10 +1681,19 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	//connection.autoconnect
 	if gonmmm.NMConIsExist(conname) {
-		if pwd := gonmmm.NMConGetField(conname, "802-11-wireless-security.psk"); pwd == password {
-			return nil
-		} else {
-			return gonmmm.NMConModField(conname, "802-11-wireless-security.psk", password)
+		pwd := gonmmm.NMConGetField(conname, "802-11-wireless-security.psk")
+		ssidTmp := gonmmm.NMConGetField(conname, "wifi.ssid")
+
+		if ssidTmp != ssid {
+			if err := gonmmm.NMConModField(conname, "wifi.ssid", password); err != nil {
+				return err
+			}
+		}
+
+		if pwd != password {
+			if err := gonmmm.NMConModField(conname, "802-11-wireless-security.psk", password); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1689,7 +1702,6 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 }
 
 func NMConnectWifi(ifacename, ssid, password string) error {
-	//connection.autoconnect
 	if gonmmm.NMConIsExist(ssid) {
 		if pwd := gonmmm.NMConGetField(ssid, "802-11-wireless-security.psk"); pwd == password {
 			return nil
