@@ -1695,6 +1695,7 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 				return err
 			}
 		}
+		return nil
 	}
 
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi hotspot ifname %s con-name %s ssid %s password %s", ifacename, conname, ssid, password))
@@ -1708,6 +1709,7 @@ func NMConnectWifi(ifacename, ssid, password string) error {
 		} else {
 			return gonmmm.NMConModField(ssid, "802-11-wireless-security.psk", password)
 		}
+		return nil
 	}
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s  %s password %s", ssid, ifacename, password))
 	return err
