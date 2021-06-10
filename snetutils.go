@@ -515,8 +515,17 @@ func RouteTem(ifacename string, metrics ...int) (err error) {
 	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
 	        metric=%d;
 			gwip=%s
-			route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${metric}$" && exit 0
+
+			einfo=$(route -n | grep -e '^0.0.0.0' | grep ${iface} | sort -r -u -k2  |  head -n 1)
+			egw=$(echo -n "${einfo}" | awk '{print $2}')
+
+			for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
+			  ((i < metric)) && exit 0
+			done
 			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
+			[[ $gw ]] || {
+			    [[ $egw ]] && { [[ $egw =~ "0.0.0.0" ]] || gw="gw ${egw}"; }
+			}
 			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
 			route add default metric ${metric} ${gw} dev ${iface}
 			route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, metric, gwip), time.Second*5); err == nil {
@@ -546,10 +555,14 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 	}
 
 	cmd := fmt.Sprintf(`iface=%s
-	        nmt=%d
-	        route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$" && exit 0
+	        metric=%d
+
+	        for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
+			  ((i < metric)) && exit 0
+			done
+
 			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -g | head -n 1)
-			einfo=$(route -n | grep -e '^0.0.0.0' | sort -u -k2 -g  | grep -m 1 ${iface})
+			einfo=$(route -n | grep -e '^0.0.0.0' | grep ${iface} | sort -r -u -k2  |  head -n 1)
 			gw=$(echo -n "${einfo}" | awk '{print $2}')
 			gm=$(echo -n "${einfo}" | awk '{print $3}')
 			mt=$(echo -n "${einfo}" | awk '{print $5}')
@@ -564,16 +577,16 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 			   dmt=$(echo -n "${deinfo}" | awk '{print $5}')
 			   [[ ${dgw} =~ '0.0.0.0' ]] && dgwconf="" || dgwconf="gw ${dgw}"
 		       route del default metric ${dmt} dev ${dif}
-			   route add default metric $((nmt + 10)) ${dgwconf} dev ${dif}
+			   route add default metric $((metric + 10)) ${dgwconf} dev ${dif}
 			}
 
 			}
 
-			[[ ${gw} =~ '0.0.0.0' ]] && gwconf="" || gwconf="gw ${gw}"
+			{ [[ ${gw} =~ '0.0.0.0' ]] || ! [[ ${gw} ]]; } && gwconf="" || gwconf="gw ${gw}"
 			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
 			ip link set dev ${iface}  up
-			route add default metric ${nmt} ${gwconf} dev ${iface}
-			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, mt)
+			route add default metric ${metric} ${gwconf} dev ${iface}
+			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, mt)
 	if stdou, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
 		log.Printf("\nRoute command\n%s", cmd)
 		log.Printf("\nError output\n%s", string(stderr))
