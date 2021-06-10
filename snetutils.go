@@ -575,7 +575,9 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 			route add default metric ${nmt} ${gwconf} dev ${iface}
 			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${nmt}$"`, ifacename, mt)
 	if stdou, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
-		fmt.Errorf("\nCan not configure network for %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
+		log.Printf("\nRoute command\n%s", cmd)
+		log.Printf("\nError output\n%s", string(stderr))
+		log.Printf("\nStdout\n%s", string(stdou))
 		return fmt.Errorf("%s", string(stderr))
 	} else {
 		//		log.Warnf("RouteDefault cmd %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
@@ -1682,10 +1684,10 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	//connection.autoconnect
 	if gonmmm.NMConIsExist(conname) {
 		pwd := gonmmm.NMConGetField(conname, "802-11-wireless-security.psk")
-		ssidTmp := gonmmm.NMConGetField(conname, "wifi.ssid")
+		ssidTmp := gonmmm.NMConGetField(conname, "802-11-wireless.ssid")
 
 		if ssidTmp != ssid {
-			if err := gonmmm.NMConModField(conname, "wifi.ssid", password); err != nil {
+			if err := gonmmm.NMConModField(conname, "wifi.ssid", ssid); err != nil {
 				return err
 			}
 		}
