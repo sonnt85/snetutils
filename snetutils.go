@@ -1726,7 +1726,7 @@ func NMConnectWifi(ifacename, ssid, password string) error {
 		}
 		return nil
 	}
-	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s  %s password %s", ssid, ifacename, password))
+	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s password %s", ssid, ifacename, password))
 	return err
 }
 
