@@ -511,6 +511,9 @@ func RouteTem(ifacename string, metrics ...int) (err error) {
 	if len(metrics) != 0 {
 		metric = metrics[0]
 	}
+	if !NetIfaceHasIpv4(ifacename) {
+		return fmt.Errorf("Can not get ipv4 %s", ifacename)
+	}
 	gwip, _ := NetGetDefaultGatewayOfIface(ifacename)
 	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
 	        metric=%d;
@@ -1345,6 +1348,12 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 		//cmd2run := fmt.Sprintf("ifconfig %s %s netmask %s", ifi, ipstr, maskstr)
 		//ip addr flush dev eth1
 
+		if curIp, err := NetGetInterfaceIpv4Addr(ifi); err == nil && curIp == ipstr {
+			if curMask, err := NetGetMask(ifi); err == nil && curMask == maskstr {
+				//				fmt.Printf("Interface %s has been configured correctly before [%s/%s]", ifi, curIp, curMask)
+				return nil
+			}
+		}
 		for {
 			IpFlush(ifi)
 			cmd2run := fmt.Sprintf("ip a add %s/%s dev %s brd +", ipstr, maskstr, ifi)
