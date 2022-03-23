@@ -43,12 +43,14 @@ const (
 )
 
 type DeviceCCCInfo struct {
-	From          string   `json:"from"`
-	IP            string   `json:"ip"`
-	Port          int      `json:"port"`
-	Serial_number string   `json:"serial_number"`
-	Device_id     string   `json:"device_id"`
-	Extra         []string `json:"more"`
+	From          string    `json:"from"`
+	IP            string    `json:"ip"`
+	Port          int       `json:"port"`
+	Serial_number string    `json:"serial_number"`
+	Device_id     string    `json:"device_id"`
+	Extra         []string  `json:"more"`
+	LastDiscovery time.Time `json:"-"`
+	Version       string    `json:"Version"`
 }
 
 type DiscoveryInfo struct {
@@ -60,24 +62,16 @@ type DiscoveryInfo struct {
 }
 
 type CamerasInfo struct {
-	From  string `json:"from"`
-	IP    string `json:"ip"`
-	Name  string `json:"name"`
-	XADDR string `json:"xaddr"`
-	//	Urn      string `json:"urn"`
-	UUID             string    `json: "uuid"`
+	From             string    `json:"from"`
+	IP               string    `json:"ip"`
+	Name             string    `json:"name"`
+	XADDR            string    `json:"xaddr"`
+	UUID             string    `json:"uuid"`
 	Hardware         string    `json:"hardware"`
 	Location         string    `json:"location"`
+	FirmwareVersion  string    `json:"firmware version"`
 	LastConnectError time.Time `json:"last_error_time"`
-
 	//	LastConnectError time.Time `json:",omitempty"`
-	//	User     string `json:"user"`
-	//	Password string `json:"password"`
-	//	SnapshortLink string `json:"snapshortlink"`
-	//	SreamLink     string `json:"sreamlink"`
-	//	Resolution_x  int    `json:"resolution_x"`
-	//	Resolution_y  int    `json:"resolution_y"`
-	//	Selected_flag bool `json:"selected_flag"`
 }
 
 func NetGetInterfaceIpv4Addr(interfaceName string) (addr string, err error) {
@@ -99,9 +93,9 @@ func NetGetInterfaceIpv4Addr(interfaceName string) (addr string, err error) {
 	}
 	if ipv4Addr == nil {
 		if len(addrs) != 0 {
-			return "", errors.New(fmt.Sprintf("There isn't any ipv4 on interface %s\n", interfaceName))
+			return "", fmt.Errorf(fmt.Sprintf("There isn't any ipv4 on interface %s\n", interfaceName))
 		} else {
-			return "", errors.New(fmt.Sprintf("There isn't any ip on interface %s\n", interfaceName))
+			return "", fmt.Errorf(fmt.Sprintf("There isn't any ip on interface %s\n", interfaceName))
 		}
 	}
 	return ipv4Addr.String(), nil
@@ -181,7 +175,7 @@ func ResolverDomain2Ip4(domain string, debugflag ...bool) (addr string, err erro
 				return v, nil
 			}
 		}
-		return "", errors.New("There is not ipv4")
+		return "", fmt.Errorf("there is not ipv4")
 	} else {
 		return "", err
 	}
@@ -348,6 +342,46 @@ func NetIsOnlinePing(times, intervalsecs int, ifacenames ...string) bool {
 	return false
 }
 
+func PingExternal(domain, ifacename string, timeout time.Duration) error {
+	cmd := fmt.Sprintf("ping -c 1 -I %s  %s", ifacename, domain)
+	_, _, err := sexec.ExecCommandShell(cmd, timeout)
+	return err
+}
+
+func NetIsOnlinePingExternal(times, intervalsecs int, ifacenames ...string) bool {
+	ifacename := ""
+	if len(ifacenames) != 0 {
+		ifacename = ifacenames[0]
+	}
+	timeout := time.Millisecond * 1000
+	//	if sutils.StringContainsI(ifacename, "ppp") {
+	//		timeout = time.Millisecond * 3000
+	//	}
+	numDnsTest := len(dnslist)
+	//	if numDnsTest >= 4 {
+	//		numDnsTest = 4
+	//	}
+	ttk := time.NewTicker(time.Second * time.Duration(intervalsecs))
+	for i1 := 0; i1 < times; i1++ {
+		for i := 0; i < numDnsTest; i++ {
+			//			log.Warn("Ping interface ", ifacename)
+			if err := PingExternal(dnslist[i], ifacename, timeout); err != nil {
+				//				if sutils.StringContainsI(ifacename, "ppp") {
+				// log.Errorf("Error to use iface %s to test dns server: %s\n%s\n", ifacename, dnslist[i], err.Error())
+				//				}
+				continue
+			} else {
+				//				log.Warnf("Use iface %s to test dns server: %s\n", ifacename, dnslist[i])
+				return true
+			}
+		}
+		if times > 1 {
+			<-ttk.C
+		}
+	}
+	return false
+}
+
 func IfaceIsPluged(ifacename string) bool {
 	if retbyte, err := ioutil.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", ifacename)); err == nil {
 		retstr := string(retbyte)
@@ -367,9 +401,10 @@ func IfaceListHasInternet() (ifaces []string) {
 		if NetIsOnline(1, 1, iname) {
 			ifaces = append(ifaces, iname)
 			//			fmt.Printf("Iface %s is online \n", iname)
-		} else {
-			//			fmt.Printf("Iface %s is offline \n", iname)
 		}
+		// else {
+		//			fmt.Printf("Iface %s is offline \n", iname)
+		//}
 	}
 	return
 }
@@ -427,10 +462,10 @@ func NetIsOnline(times, intervalsecs int, ifacenames ...string) bool {
 	ttk := time.NewTicker(time.Second * time.Duration(intervalsecs))
 	for i1 := 0; i1 < times; i1++ {
 		for i := 0; i < len(dnslist); i++ {
-			cmd2run := fmt.Sprintf(`curl -m 2 %s`, dnslist[i])
+			cmd2run := fmt.Sprintf(`curl -m 5 %s`, dnslist[i])
 
 			if len(ifacenames) != 0 {
-				cmd2run = fmt.Sprintf(`curl -m 2  --interface %s %s`, ifacenames[0], dnslist[i])
+				cmd2run = fmt.Sprintf(`curl -m 5  --interface %s %s`, ifacenames[0], dnslist[i])
 			}
 			if _, _, err := sexec.ExecCommandShell(cmd2run, time.Millisecond*2100); err == nil {
 				return true
@@ -501,8 +536,7 @@ func IfaceGetAllName(noLocalhosts ...bool) (ifaces []string) {
 var __ifaceLoopbackStaticList = []string{"lo"}
 
 func NetGetStaticLoopbackName() (retstr string) {
-	namekeys := make([]string, 0)
-	namekeys = []string{}
+	namekeys := []string{}
 
 	interfaces, _ := net.Interfaces()
 	for _, interf := range interfaces {
@@ -529,10 +563,8 @@ func NetGetStaticLoopbackName() (retstr string) {
 var __ifaceStaticList = []string{"eth", "wlan", "enp", "enx", "Ethernet", "en"}
 
 func NetGetStaticMac() string {
-	namekeys := make([]string, 0)
-	imacs := make(map[string]string, 0)
-	namekeys = []string{}
-	imacs = map[string]string{}
+	namekeys := []string{}
+	imacs := map[string]string{}
 
 	interfaces, _ := net.Interfaces()
 	for _, interf := range interfaces {
@@ -566,7 +598,7 @@ func RouteTem(ifacename string, metrics ...int) (err error) {
 		metric = metrics[0]
 	}
 	if !NetIfaceHasIpv4(ifacename) {
-		return fmt.Errorf("Can not get ipv4 %s", ifacename)
+		return fmt.Errorf("can not get ipv4 %s", ifacename)
 	}
 	gwip, _ := NetGetDefaultGatewayOfIface(ifacename)
 	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
@@ -577,7 +609,8 @@ func RouteTem(ifacename string, metrics ...int) (err error) {
 			egw=$(echo -n "${einfo}" | awk '{print $2}')
 
 			for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
-			  ((i < metric)) && exit 0
+			  ((i == 2021)) && exit 0
+			  ((i <= metric)) && exit 0
 			done
 			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
 			[[ $gw ]] || {
@@ -615,7 +648,7 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 	        metric=%d
 
 	        for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
-			  ((i < metric)) && exit 0
+			  ((i <= metric)) && exit 0
 			done
 
 			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -g | head -n 1)
@@ -643,6 +676,7 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
 			ip link set dev ${iface}  up
 			route add default metric ${metric} ${gwconf} dev ${iface}
+			echo "Gateway default ${gwconf}"
 			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, mt)
 	if _, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
 		//		log.Printf("\nRoute command\n%s", cmd)
@@ -650,7 +684,7 @@ func RouteDefault(ifacename string, metrics ...int) (err error) {
 		//		log.Printf("\nStdout\n%s", string(stdou))
 		return fmt.Errorf("%s", string(stderr))
 	} else {
-		//		log.Warnf("RouteDefault cmd %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
+		// log.Warnf("RouteDefault cmd %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
 		return nil
 	}
 }
@@ -719,9 +753,9 @@ func Ping(addr, iface string, timeouts ...time.Duration) (*net.IPAddr, time.Dura
 	}
 	listenAddr := "0.0.0.0"
 	if len(iface) != 0 {
-		if sutils.StringContainsI(iface, "ppp") {
-			//			defer sutils.TimeTrack(time.Now())
-		}
+		// if sutils.StringContainsI(iface, "ppp") {
+		//			defer sutils.TimeTrack(time.Now())
+		// }
 		if ip4, err := NetGetInterfaceIpv4Addr(iface); err == nil {
 			//			fmt.Printf("\nip's%s is %s\n", iface, ip4)
 			listenAddr = ip4
@@ -1066,12 +1100,22 @@ func NetGetMacInterFace(interfaceName string) (macadd string, err error) {
 }
 
 func NetGetInameByIP(ip string) (i string, err error) {
-	interfaces, err := net.Interfaces() //all ifaces
+	interfaces, _ := net.Interfaces() //all ifaces
+	ipTocheck := netaddr.ParseIP(ip)
+	if len(ipTocheck) == 0 {
+		return "", fmt.Errorf("ip is wrong format")
+	}
 	for _, interf := range interfaces {
 		if addrs, err := interf.Addrs(); err == nil {
 			for _, addr := range addrs {
-				if strings.Contains(addr.String(), ip) {
-					return interf.Name, nil
+				cidr := addr.String()
+				ipset := new(netaddr.IPSet)
+				if _, ipnet, err := netaddr.ParseCIDR(cidr); err == nil {
+					ipset.InsertNet(ipnet)
+					if ipset.Contains(ipTocheck) {
+						// if strings.Contains(cidr, ip) {
+						return interf.Name, nil
+					}
 				}
 			}
 		}
@@ -1094,10 +1138,7 @@ func NetGetMac(iface ...string) (macadd string, err error) {
 }
 
 func NetIsIpv4(ip net.IP) bool {
-	if strings.Contains(ip.String(), ".") { //firtst ip4
-		return true
-	}
-	return false
+	return strings.Contains(ip.String(), ".") //firtst ip4
 }
 
 func NetTCPClientSend(servAddr string, dataSend []byte) (retbytes []byte, err error) {
@@ -1171,9 +1212,12 @@ func NetGetMacs(iface ...string) ([]string, error) {
 	return as, nil
 }
 
-func TimeUpdateFromInternet() bool {
+func TimeUpdateFromInternet(tzone ...string) bool {
 	var err error
 	tz := TimeZoneGet()
+	if len(tzone) != 0 && len(tzone[0]) != 0 {
+		tz = tzone[0]
+	}
 	datetime := TimeGetUTCFromInternet()
 	if (len(tz) != 0) && (len(datetime) != 0) {
 		errsetdatetime := false
@@ -1222,7 +1266,7 @@ func IpGetDefault(ipstr string) (mask, gw string, err error) {
 		gw = net.IP(ipgw).String()
 		return mask, gw, nil
 	} else {
-		return mask, gw, fmt.Errorf("Ip error")
+		return mask, gw, fmt.Errorf("ip error")
 	}
 }
 
@@ -1259,7 +1303,7 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 			if ifitmp, err := GetDefaultIface(); err == nil {
 				ifiname = ifitmp
 			} else {
-				return fmt.Errorf("Can not get default iface")
+				return fmt.Errorf("can not get default iface")
 			}
 		}
 	}
@@ -1281,7 +1325,7 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 	}
 	ips := ipset.GetIPs(256)
 	if len(ips) <= 0 {
-		return fmt.Errorf("Empty ips list")
+		return fmt.Errorf("empty ips list")
 	}
 	iptest := ips[len(ips)-1]
 	ipmask := iptest.DefaultMask()
@@ -1346,7 +1390,7 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 		//		}
 	}
 
-	return fmt.Errorf("Can not config %s", ipcidr)
+	return fmt.Errorf("can not config %s", ipcidr)
 }
 
 func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
@@ -1359,7 +1403,7 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				if ifitmp, err := GetDefaultIface(); err == nil {
 					ifi = ifitmp
 				} else {
-					return fmt.Errorf("Can not get default iface")
+					return fmt.Errorf("can not get default iface")
 				}
 			}
 		}
@@ -1370,11 +1414,11 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				maskstr = net.IP(ip.DefaultMask()).String()
 			}
 		} else {
-			return fmt.Errorf("Ip %s is wrong", maskstr)
+			return fmt.Errorf("ip %s is wrong", maskstr)
 		}
 
 		if mask := net.ParseIP(maskstr); mask == nil {
-			return fmt.Errorf("Mask %s is wrong", maskstr)
+			return fmt.Errorf("mask %s is wrong", maskstr)
 		} else {
 			ip := net.ParseIP(ipstr)
 			ipmask := net.IPMask(mask.To4())
@@ -1419,14 +1463,14 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 				return nil
 			} else {
 				if err := IpDhcpRenew(ifi); err == nil {
-					return fmt.Errorf("Can not confiture ip: %s so restore use dhcp ", string(errstd))
+					return fmt.Errorf("can not confiture ip: %s so restore use dhcp ", string(errstd))
 				} else {
-					return fmt.Errorf("Can not confiture ip: %s", string(errstd))
+					return fmt.Errorf("can not confiture ip: %s", string(errstd))
 				}
 			}
 		}
 	} else {
-		return fmt.Errorf("Can not confiture ip with zero ip and mask")
+		return fmt.Errorf("can not confiture ip with zero ip and mask")
 	}
 }
 
@@ -1498,20 +1542,17 @@ func NetInitDiscoveryServer(ipService interface{}, serviceport interface{}, id, 
 	//	defer s.Shutdown()
 }
 
-func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...string) []*DiscoveryInfo {
-	serviceInfo := make([]*DiscoveryInfo, 0)
+func NetDiscoveryQueryServiceEntry(serviceName, domain string, timeout time.Duration, ifaceNames ...string) []*mdns.ServiceEntry {
+	serviceInfo := make([]*mdns.ServiceEntry, 0)
 	// Make a channel for results and start listening
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
+	mutex := &sync.Mutex{}
 	go func() {
 		for entry := range entriesCh {
-			//			fmt.Printf("Got new signage entry: %v\n", entry)
-			service := new(DiscoveryInfo)
-			service.Ip4 = entry.AddrV4.String()
-			service.Port = entry.Port
-			service.Info = entry.InfoFields
-			service.Name = entry.Name
-			service.Host = entry.Host
-			serviceInfo = append(serviceInfo, service)
+			// fmt.Printf("Got new signage entry: %v\n", entry)
+			mutex.Lock()
+			serviceInfo = append(serviceInfo, entry)
+			mutex.Unlock()
 		}
 	}()
 
@@ -1536,6 +1577,65 @@ func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...
 		timeout = time.Second * 2
 	}
 	params.Timeout = timeout
+	params.Domain = domain
+	if err := mdns.Query(params); err != nil {
+		log.Error("mdns.Query err:", err)
+	}
+	// Start the lookup
+	//	mdns.Lookup("_signage._tcp", entriesCh)
+	close(entriesCh)
+	return serviceInfo
+}
+
+func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...string) []*DiscoveryInfo {
+	serviceInfo := make([]*DiscoveryInfo, 0)
+	// Make a channel for results and start listening
+	entriesCh := make(chan *mdns.ServiceEntry, 16)
+	mutex := &sync.Mutex{}
+	if len(serviceName) == 0 {
+		serviceName = "_signage._tcp"
+	}
+	if serviceName == "all" {
+		serviceName = ""
+	}
+	params := mdns.DefaultParams(serviceName)
+	params.WantUnicastResponse = true
+	if len(ifaceNames) != 0 {
+		if ief, err := net.InterfaceByName(ifaceNames[0]); err == nil { // get interface
+			//			log.Info("NetDiscoveryQuery on interface ", ifaceNames[0])
+			params.Interface = ief
+		} else {
+			return serviceInfo
+		}
+	} else {
+		log.Errorf("NetDiscoveryQuery on default interface [not for interface %s]", ifaceNames[0])
+	}
+	params.Domain = ""
+	params.Entries = entriesCh
+	if timeout == 0 {
+		timeout = time.Second * 2
+	}
+	params.Timeout = timeout
+
+	go func() {
+		for entry := range entriesCh {
+			// fmt.Printf("Got new signage entry: %v\n", entry)
+			// serviceAddr := fmt.Sprintf("%s.%s.", strings.Trim(params.Service, "."), strings.Trim(params.Domain, "."))
+			// if !strings.HasSuffix(entry.Name, serviceAddr) {
+			// 	continue
+			// }
+			service := new(DiscoveryInfo)
+			service.Ip4 = entry.AddrV4.String()
+			service.Port = entry.Port
+			service.Info = entry.InfoFields
+			service.Name = entry.Name
+			service.Host = entry.Host
+			mutex.Lock()
+			serviceInfo = append(serviceInfo, service)
+			mutex.Unlock()
+		}
+	}()
+
 	if err := mdns.Query(params); err != nil {
 		log.Error("mdns.Query err:", err)
 	}
@@ -1548,10 +1648,8 @@ func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...
 func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList []DeviceCCCInfo) {
 	ifaceall := []string{}
 	if len(ifaceName) != 0 {
-		if ifaceName[0] == "all" {
+		if ifaceName[0] == "all" || len(ifaceName[0]) == 0 {
 			ifaceall = IfaceGetAllName(true)
-		} else if len(ifaceName[0]) == 0 {
-			ifaceName = []string{}
 		} else {
 			ifaceall = ifaceName
 		}
@@ -1575,12 +1673,13 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 			//		serviceInfo := NetDiscoveryQuery(servicename, time.Second*1, ifaceName...)
 			//			fmt.Printf("\n\n\nDiscoveryDevice\n%s\n%#v\n%#v\n", servicename, serviceInfo, iface)
 			for _, entry := range serviceInfo {
-				//				fmt.Printf("entry\n%s\n%v\n", entry.Name, entry)
+				// fmt.Printf("entry\n%s\n%v\n", entry.Name, entry)
 				sig := DeviceCCCInfo{}
 				sig.IP = entry.Ip4
 				sig.Port = entry.Port
 				netry := len(entry.Info)
-				if (netry >= 3) && (entry.Info[netry-1] == sig.IP) {
+				if netry >= 3 {
+					// if (netry >= 3) && (entry.Info[netry-1] == sig.IP) {
 					sig.Serial_number = entry.Info[0]
 					sig.Device_id = entry.Info[1]
 					sig.From = iface
@@ -1588,6 +1687,7 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 					if netry >= 4 {
 						sig.Extra = entry.Info[2:(netry - 1)]
 					}
+					sig.LastDiscovery = time.Now()
 					lockwrire.Lock()
 					deviceList = append(deviceList, sig)
 					lockwrire.Unlock()
@@ -1604,10 +1704,8 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 	ifaceall := []string{}
 	if len(ifaceName) != 0 {
-		if ifaceName[0] == "all" {
+		if ifaceName[0] == "all" || ifaceName[0] == "" {
 			ifaceall = IfaceGetAllName(true)
-		} else if ifaceName[0] == "" {
-			ifaceName = []string{}
 		} else {
 			ifaceall = ifaceName
 		}
@@ -1628,7 +1726,7 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 			}()
 			devices := wsdiscovery.SendProbe(iface, nil, []string{"dn:NetworkVideoTransmitter"}, map[string]string{"dn": "http://www.onvif.org/ver10/network/wsdl"})
 			for _, j := range devices {
-				//				log.Println("\n\n\ndevice:" + j + "\n\n\n")
+				// log.Println("wsdiscovery device:" + j)
 				doc := etree.NewDocument()
 				if doc == nil {
 					continue
@@ -1706,7 +1804,20 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 	//connection.autoconnect
 	if gonmmm.NMConIsExist(conname) {
-		pwd := gonmmm.NMConGetField(conname, "802-11-wireless-security.psk")
+		keymgmt := gonmmm.NMConGetField(conname, "802-11-wireless-security.key-mgmt")
+		if keymgmt == "none" {
+			if password != gonmmm.NMConGetField(conname, "802-11-wireless-security.wep-key0") {
+				if err := gonmmm.NMConModField(conname, "802-11-wireless-security.wep-key0", password); err != nil {
+					return err
+				}
+			}
+		} else if keymgmt == "wpa-psk" {
+			if password != gonmmm.NMConGetField(conname, "802-11-wireless-security.psk") {
+				if err := gonmmm.NMConModField(conname, "802-11-wireless-security.psk", password); err != nil {
+					return err
+				}
+			}
+		}
 		ssidTmp := gonmmm.NMConGetField(conname, "802-11-wireless.ssid")
 
 		if ssidTmp != ssid {
@@ -1715,11 +1826,6 @@ func NMCreateHostPost(ifacename, conname, ssid, password string) error {
 			}
 		}
 
-		if pwd != password {
-			if err := gonmmm.NMConModField(conname, "802-11-wireless-security.psk", password); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
@@ -1734,7 +1840,6 @@ func NMConnectWifi(ifacename, ssid, password string) error {
 		} else {
 			return gonmmm.NMConModField(ssid, "802-11-wireless-security.psk", password)
 		}
-		return nil
 	}
 	_, err := gonmmm.NMRunCommand(fmt.Sprintf("dev wifi connect %s ifname %s password %s", ssid, ifacename, password))
 	return err
@@ -1746,4 +1851,70 @@ func IfaceRestart(ifacname string) bool {
 		return true
 	}
 	return false
+}
+
+func GetFreePort(isUdp ...bool) (int, error) {
+	if len(isUdp) != 0 && isUdp[0] {
+		return GetFreeUdpPort()
+	}
+	return GetFreeTcpPort()
+}
+
+func GetFreeTcpPort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+func GetFreeUdpPort() (int, error) {
+	addr, err := net.ResolveUDPAddr("udp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.LocalAddr().(*net.UDPAddr).Port, nil
+}
+
+func GetFreePorts(count int, isUdp ...bool) ([]int, error) {
+	if len(isUdp) != 0 && isUdp[0] {
+		return GetFreeUdpPorts(count)
+	}
+	return GetFreeTcpPorts(count)
+}
+
+func GetFreeUdpPorts(count int) ([]int, error) {
+	var ports []int
+	for i := 0; i < count; i++ {
+		if port, err := GetFreeTcpPort(); err == nil {
+			ports = append(ports, port)
+		} else {
+			return nil, err
+		}
+	}
+	return ports, nil
+}
+
+func GetFreeTcpPorts(count int) ([]int, error) {
+	var ports []int
+	for i := 0; i < count; i++ {
+		if port, err := GetFreeUdpPort(); err == nil {
+			ports = append(ports, port)
+		} else {
+			return nil, err
+		}
+	}
+	return ports, nil
 }

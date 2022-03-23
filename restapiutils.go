@@ -123,7 +123,7 @@ func HABuildErrorResponseStr(errors []HAErrorCode, messages []HAMessages) (respo
 }
 
 func HABuildSuccessResponeStr(result HAResult, messages []HAMessages, result_info ...HAResultInfo) (respose string) {
-	hasuccess := HABuildSuccessResponeStr(result, messages, result_info...)
+	hasuccess := HABuildSuccessRespone(result, messages, result_info...)
 	resposeb, _ := json.Marshal(hasuccess)
 	return string(resposeb)
 }
