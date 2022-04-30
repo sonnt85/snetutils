@@ -71,7 +71,6 @@ type CamerasInfo struct {
 	Location         string    `json:"location"`
 	FirmwareVersion  string    `json:"firmware version"`
 	LastConnectError time.Time `json:"last_error_time"`
-	//	LastConnectError time.Time `json:",omitempty"`
 }
 
 func NetGetInterfaceIpv4Addr(interfaceName string) (addr string, err error) {
@@ -1574,7 +1573,7 @@ func NetDiscoveryQueryServiceEntry(serviceName, domain string, timeout time.Dura
 	params.Domain = ""
 	params.Entries = entriesCh
 	if timeout == 0 {
-		timeout = time.Second * 2
+		timeout = time.Millisecond * 600
 	}
 	params.Timeout = timeout
 	params.Domain = domain
@@ -1613,7 +1612,7 @@ func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...
 	params.Domain = ""
 	params.Entries = entriesCh
 	if timeout == 0 {
-		timeout = time.Second * 2
+		timeout = time.Millisecond * 500
 	}
 	params.Timeout = timeout
 
@@ -1669,7 +1668,7 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 			defer func() {
 				wg.Done()
 			}()
-			serviceInfo := NetDiscoveryQuery(servicename, time.Second*4, iface)
+			serviceInfo := NetDiscoveryQuery(servicename, time.Millisecond*700, iface)
 			//		serviceInfo := NetDiscoveryQuery(servicename, time.Second*1, ifaceName...)
 			//			fmt.Printf("\n\n\nDiscoveryDevice\n%s\n%#v\n%#v\n", servicename, serviceInfo, iface)
 			for _, entry := range serviceInfo {
