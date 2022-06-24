@@ -160,7 +160,7 @@ func ResolverDomain(domain string, debugflag ...bool) (addrs []string, err error
 			}
 
 			if len(debugflag) != 0 && debugflag[0] {
-				fmt.Printf("\nCan not used dns server %s for finding %s\n", dnslist[i], domain)
+				log.Errorf("\nCan not used dns server %s for finding %s\n", dnslist[i], domain)
 			}
 		}
 	}
@@ -1140,16 +1140,21 @@ func NetIsIpv4(ip net.IP) bool {
 	return strings.Contains(ip.String(), ".") //firtst ip4
 }
 
-func NetTCPClientSend(servAddr string, dataSend []byte) (retbytes []byte, err error) {
+func NetTCPClientSend(servAddr string, dataSend []byte, timeouts ...time.Duration) (retbytes []byte, err error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", servAddr)
 	if err != nil {
-		println("ResolveTCPAddr failed:", err.Error())
+		log.Error("ResolveTCPAddr failed:", err.Error())
 		return retbytes, err
 	}
 
-	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	var conn *net.TCPConn
+	if len(timeouts) != 0 {
+		// conn, err = net.DialTCP("tcp", tcpAddr, timeouts[0])
+	} else {
+		conn, err = net.DialTCP("tcp", nil, tcpAddr)
+	}
 	if err != nil {
-		println("Dial failed:", err.Error())
+		log.Error("Dial failed:", err.Error())
 		return retbytes, err
 	}
 
@@ -1158,7 +1163,7 @@ func NetTCPClientSend(servAddr string, dataSend []byte) (retbytes []byte, err er
 	_, err = conn.Write(dataSend)
 
 	if err != nil {
-		fmt.Println("Write to server failed:", err.Error())
+		log.Error("Write to server failed:", err.Error())
 		return retbytes, err
 	}
 	//	conn.Write(io.EOF)
@@ -1166,7 +1171,7 @@ func NetTCPClientSend(servAddr string, dataSend []byte) (retbytes []byte, err er
 
 	n, err := conn.Read(reply)
 	if err != nil {
-		println("Write to server failed:", err.Error())
+		log.Error("Write to server failed:", err.Error())
 	}
 	return reply[:n], err
 }
@@ -1476,43 +1481,59 @@ func IpConfig(ipstr, maskstr, gwipstr string, ifaces ...string) error {
 func MacFromIP(ip2check string, ifaceFlags ...string) (info string, err error) {
 
 	durFlag := time.Millisecond * 500
-	diface, _ := NetGetInterfaceInfo(IfaceIname)
 
-	ifaceFlag := diface
-	if len(ifaceFlags) != 0 {
-		ifaceFlag = ifaceFlags[0]
+	if len(ifaceFlags) == 0 {
+		var ifs []net.Interface
+		ifs, err = net.Interfaces()
+		if err != nil {
+			return
+		}
+		for _, v := range ifs {
+			ifaceFlags = append(ifaceFlags, v.Name)
+		}
 	}
 	// Ensure valid network interface
-	ifi, err := net.InterfaceByName(ifaceFlag)
-	if err != nil {
-		return info, err
-	}
-
 	// Set up ARP client with socket
-	c, err := arp.Dial(ifi)
-	if err != nil {
-		return info, err
-	}
-	defer c.Close()
+	var ifi *net.Interface
+	var errs []error
+	var mac net.HardwareAddr
+	for i := 0; i < len(ifaceFlags); i++ {
+		ifi, err = net.InterfaceByName(ifaceFlags[i])
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		var c *arp.Client
+		c, err = arp.Dial(ifi)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		defer c.Close()
 
-	// Set request deadline from flag
-	if err := c.SetDeadline(time.Now().Add(durFlag)); err != nil {
-		return info, err
-	}
+		// Set request deadline from flag
+		if err = c.SetDeadline(time.Now().Add(durFlag)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
 
-	// Request hardware address for IP address
-	ip := net.ParseIP(ip2check).To4()
-	mac, err := c.Resolve(ip)
-	if err != nil {
-		return info, err
+		// Request hardware address for IP address
+		ip := net.ParseIP(ip2check).To4()
+		mac, err = c.Resolve(ip)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		return mac.String(), nil
 	}
-
-	//	log.Printf("%s -> %s", ip, mac)
-	return mac.String(), nil
-	//	return fmt.Sprintf("%s -> %s", ip, mac), nil
+	return "", fmt.Errorf("%+v", errs)
 }
 
-func NetInitDiscoveryServer(ipService interface{}, serviceport interface{}, id, serviceName string, info interface{}, ifaceName ...string) (s *mdns.Server, err error) {
+// ipService: net.IP,  *net.IP, []net.IP, *[]net.IP, string, *string, []string, *[]string => *[]net.IP
+// serviceport: int, *int => *int
+// info: string, []string, *[]string => *[]string
+// ifaceName: string, net.Interface, *net.Interface => *net.Interface
+func NetInitDiscoveryServer(ipService interface{}, serviceport interface{}, id, serviceName string, info interface{}, ifaceName ...interface{}) (s *mdns.Server, err error) {
 
 	if len(serviceName) == 0 {
 		serviceName = "_signage._tcp"
@@ -1521,18 +1542,27 @@ func NetInitDiscoveryServer(ipService interface{}, serviceport interface{}, id, 
 	service, err := mdns.NewMDNSService(id, serviceName, "", "", serviceport, ipService, info)
 
 	if err != nil {
-		fmt.Println("Cannot create config mdnsServer", err)
+		log.Error("Cannot create config mdnsServer", err)
 		return nil, err
 	}
 	var iface *net.Interface
+
 	if len(ifaceName) != 0 {
-		if ief, err := net.InterfaceByName(ifaceName[0]); err == nil { // get interface
-			iface = ief
+		switch v := ifaceName[0].(type) {
+		case string:
+			if ief, err := net.InterfaceByName(v); err == nil { // get interface
+				iface = ief
+			}
+		case net.Interface:
+			iface = &v
+		case *net.Interface:
+			iface = v
+		default:
 		}
 	}
 	// Create the mDNS server, defer shutdown
 	if s, err = mdns.NewServer(&mdns.Config{Zone: service, Iface: iface}); err != nil {
-		fmt.Println("Cannot start mdnsServer", err)
+		log.Error("Cannot start mdnsServer", err)
 		return nil, err
 	} else {
 		//		log.Print(s.Config.Zone.(*mdns.MDNSService).Port)
@@ -1568,7 +1598,7 @@ func NetDiscoveryQueryServiceEntry(serviceName, domain string, timeout time.Dura
 			return serviceInfo
 		}
 	} else {
-		log.Errorf("NetDiscoveryQuery on default interface [not for interface %s]", ifaceNames[0])
+		log.Error("NetDiscoveryQuery on default interface")
 	}
 	params.Domain = ""
 	params.Entries = entriesCh
@@ -1595,7 +1625,7 @@ func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...
 		serviceName = "_signage._tcp"
 	}
 	if serviceName == "all" {
-		serviceName = ""
+		serviceName = "_services._dns-sd._udp"
 	}
 	params := mdns.DefaultParams(serviceName)
 	params.WantUnicastResponse = true
@@ -1618,7 +1648,7 @@ func NetDiscoveryQuery(serviceName string, timeout time.Duration, ifaceNames ...
 
 	go func() {
 		for entry := range entriesCh {
-			// fmt.Printf("Got new signage entry: %v\n", entry)
+			// log.Printf("Got new signage entry: %v\n", entry)
 			// serviceAddr := fmt.Sprintf("%s.%s.", strings.Trim(params.Service, "."), strings.Trim(params.Domain, "."))
 			// if !strings.HasSuffix(entry.Name, serviceAddr) {
 			// 	continue
@@ -1698,6 +1728,39 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 	wg.Wait()
 
 	return deviceList
+}
+
+func OnvifSendProbe(ifaceName ...string) (devices []string) {
+	devices = make([]string, 0)
+	ifaceall := []string{}
+	if len(ifaceName) != 0 {
+		if ifaceName[0] == "all" || ifaceName[0] == "" {
+			ifaceall = IfaceGetAllName(true)
+		} else {
+			ifaceall = ifaceName
+		}
+	} else {
+		if deif, err := NetGetInterfaceInfo(IfaceIname); err == nil {
+			ifaceall = []string{deif}
+		}
+	}
+	var wg sync.WaitGroup
+	lockwrire := &sync.Mutex{}
+
+	for _, iface := range ifaceall {
+		wg.Add(1)
+		go func(iface string) {
+			defer func() {
+				wg.Done()
+			}()
+			devs := wsdiscovery.SendProbe(iface, nil, []string{"dn:NetworkVideoTransmitter"}, map[string]string{"dn": "http://www.onvif.org/ver10/network/wsdl"})
+			lockwrire.Lock()
+			devices = append(devices, devs...)
+			lockwrire.Unlock()
+		}(iface)
+	}
+	wg.Wait()
+	return devices
 }
 
 func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
@@ -1850,6 +1913,52 @@ func IfaceRestart(ifacname string) bool {
 		return true
 	}
 	return false
+}
+
+func IsPortOpen(addr string, port int, proto string, timeouts ...time.Duration) bool {
+	timeout := time.Millisecond * 500
+	if len(timeouts) != 0 {
+		timeout = timeouts[0]
+	}
+	if len(proto) == 0 {
+		proto = "tcp"
+	}
+	conn, err := net.DialTimeout(proto, fmt.Sprintf("%s:%d", addr, port), timeout)
+	if err == nil {
+		conn.Close()
+		return true
+	}
+	return false
+}
+
+func IsPortAvailable(ip string, port int, timeouts ...time.Duration) bool {
+	if IsPortOpen(ip, port, "tcp", timeouts...) {
+		return true
+	}
+	if IsPortOpen(ip, port, "udp", timeouts...) {
+		return true
+	}
+	return false
+}
+
+func IsPortTcpAvailable(ip string, port int, timeouts ...time.Duration) bool {
+	return IsPortOpen(ip, port, "tcp", timeouts...)
+}
+
+func IsPortUdpAvailable(ip string, port int, timeouts ...time.Duration) bool {
+	return IsPortOpen(ip, port, "udp", timeouts...)
+}
+
+func IsPortUsed(ip string, port int, timeouts ...time.Duration) bool {
+	return !IsPortAvailable(ip, port, timeouts...)
+}
+
+func IsPortTcpUsed(ip string, port int, timeouts ...time.Duration) bool {
+	return !IsPortTcpAvailable(ip, port, timeouts...)
+}
+
+func IsPortUdpUsed(ip string, port int, timeouts ...time.Duration) bool {
+	return !IsPortUdpAvailable(ip, port, timeouts...)
 }
 
 func GetFreePort(isUdp ...bool) (int, error) {
