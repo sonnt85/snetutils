@@ -35,40 +35,72 @@ import (
 //  }
 //}
 
+//{
+//  "result": null,
+//  "success": false,
+//  "errors": [{Code: 1006, Messages: "Client is offline"}],
+//  "messages": [],
+//}
+
+// HAErrorCode represents an error code along with a message.
 type HAErrorCode struct {
 	Code     int
 	Messages string
 }
 
-type HA map[string]interface{}
-
-type HAMessages map[string]interface{}
-
-type HAResult map[string]interface{}
-
-type HAResultInfo map[string]interface{}
-
-type HAResponseCommon struct { //            error    sucess
-	Result   HAResult      `json:"result"`  //nil
-	Success  bool          `json:"success"` //false   true
-	Errors   []HAErrorCode `json:"errors"`
-	Messages []HAMessages  `json:"messages"`
+func HABuildErrorCode(code int, msg string) HAErrorCode {
+	return HAErrorCode{code, msg}
 }
 
+// HA is a type alias representing a map with string keys and interface{} values.
+type HA map[string]interface{}
+
+// HAMessages is a type alias representing a map with string keys and interface{} values,
+// typically used for representing messages in the response.
+type HAMessages map[string]interface{}
+
+// HAResult is a type alias representing a map with string keys and interface{} values,
+// typically used for representing the result of an operation in the response.
+type HAResult map[string]interface{}
+
+// HAResultInfo is a type alias representing a map with string keys and interface{} values,
+// often used for representing additional information about the result.
+type HAResultInfo map[string]interface{}
+
+// HAResponseCommon is a common structure for both error and success responses.
+type HAResponseCommon struct {
+	Result   HAResult      `json:"result"`   // Result of the operation, nil for error
+	Success  bool          `json:"success"`  // Indicates success or failure (false/true)
+	Errors   []HAErrorCode `json:"errors"`   // List of error codes and messages
+	Messages []HAMessages  `json:"messages"` // List of messages
+}
+
+// HAErrorResponse represents an error response containing common response fields.
 type HAErrorResponse struct {
 	HAResponseCommon
 }
 
+// HASuccessResponse represents a success response containing common response fields
+// along with additional result information.
 type HASuccessResponse struct {
 	HAResponseCommon
-	Result_info HAResultInfo `json:"result_info"`
+	Result_info HAResultInfo `json:"result_info"` // Additional result information
 }
 
-func HABuildErrorResponse(errors []HAErrorCode, messages []HAMessages) (respose *HAErrorResponse) {
-	respose = new(HAErrorResponse)
-	//	respose.Result = HAResult{}
+// HABuildErrorResponse constructs an error response based on provided error codes and messages.
+// Parameters:
+//
+//	struct HAErrorCode { Code int; Messages string }
+//	errors: []HAErrorCode - List of error codes and messages
+//
+//	messages: []HAMessages (map[string]interface{}) - List of messages
+//
+// Returns:
+//
+//	response: *HAErrorResponse - Constructed error response
+func HABuildErrorResponse(errors []HAErrorCode, messages []HAMessages) (response *HAErrorResponse) {
+	respose := new(HAErrorResponse)
 	respose.Result = nil
-
 	respose.Success = false
 	if len(errors) == 0 {
 		respose.Errors = append(respose.Errors, HAErrorCode{1003, "Invalid or missing something"})
@@ -82,13 +114,22 @@ func HABuildErrorResponse(errors []HAErrorCode, messages []HAMessages) (respose 
 		respose.Messages = []HAMessages{}
 	}
 	respose.Messages = append(respose.Messages, HAMessages{"run_at": fmt.Sprintf("%s", time.Now().Format(time.StampMilli))})
-	//	log.Printf("%+v", *respose)
 	return respose
 }
 
-func HABuildSuccessRespone(result HAResult, messages []HAMessages, result_info ...HAResultInfo) (respose *HASuccessResponse) {
-	//	result={id:2d4d028de3015345da9420df5514dad0}, ,, , ){
-	respose = new(HASuccessResponse)
+// HABuildSuccessRespone constructs a success response with the provided result, messages,
+// and optional result information.
+// Parameters:
+//
+//	result: HAResult (map[string]interface{})- Result of the operation
+//	messages: []HAMessages (map[string]interface{}) - List of messages
+//	result_info: ...HAResultInfo (map[string]interface{}) - Optional additional result information
+//
+// Returns:
+//
+//	response: *HASuccessResponse - Constructed success response
+func HABuildSuccessRespone(result HAResult, messages []HAMessages, result_info ...HAResultInfo) (response *HASuccessResponse) {
+	respose := new(HASuccessResponse)
 	respose.Success = true
 	respose.Errors = []HAErrorCode{}
 	if len(messages) != 0 {
@@ -96,7 +137,7 @@ func HABuildSuccessRespone(result HAResult, messages []HAMessages, result_info .
 	} else {
 		respose.Messages = []HAMessages{}
 	}
-	respose.Messages = append(respose.Messages, HAMessages{"run_at": fmt.Sprintf("%s", time.Now().Format(time.StampMilli))})
+	respose.Messages = append(respose.Messages, HAMessages{"run_at": time.Now().Format(time.StampMilli)})
 
 	if len(result) != 0 {
 		respose.Result = result
@@ -116,13 +157,36 @@ func HABuildSuccessRespone(result HAResult, messages []HAMessages, result_info .
 	return respose
 }
 
-func HABuildErrorResponseStr(errors []HAErrorCode, messages []HAMessages) (respose string) {
+// HABuildErrorResponseStr constructs an error response as a JSON string based on provided error codes and messages.
+// Parameters:
+//
+//	errors: []HAErrorCode (type HAErrorCode struct {
+//	  Code     int
+//	  Messages string
+//	}) - List of error codes and messages
+//	messages: []HAMessages (map[string]interface{}) - List of messages
+//
+// Returns:
+//
+//	response: string - Constructed error response as a JSON string
+func HABuildErrorResponseStr(errors []HAErrorCode, messages []HAMessages) (response string) {
 	haerror := HABuildErrorResponse(errors, messages)
 	resposeb, _ := json.Marshal(haerror)
 	return string(resposeb)
 }
 
-func HABuildSuccessResponeStr(result HAResult, messages []HAMessages, result_info ...HAResultInfo) (respose string) {
+// HABuildSuccessResponeStr constructs a success response as a JSON string with the provided result, messages,
+// and optional result information.
+// Parameters:
+//
+//	result: HAResult (map[string]interface{})- Result of the operation
+//	messages: []HAMessages (map[string]interface{}) - List of messages
+//	result_info: ...HAResultInfo (map[string]interface{}) - Optional additional result information
+//
+// Returns:
+//
+//	response: string - Constructed success response as a JSON string
+func HABuildSuccessResponeStr(result HAResult, messages []HAMessages, result_info ...HAResultInfo) (response string) {
 	hasuccess := HABuildSuccessRespone(result, messages, result_info...)
 	resposeb, _ := json.Marshal(hasuccess)
 	return string(resposeb)

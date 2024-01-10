@@ -6,11 +6,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -146,13 +146,13 @@ func ResolverDomain(domain string, debugflag ...bool) (addrs []string, err error
 		Dial:     nil,
 	}
 
-	for i := 0; i < len(dnslist); i++ {
+	for _, dnsserver := range dnslist {
 		for _, pro := range []string{"udp", "tcp"} {
 			r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 				d := net.Dialer{
 					Timeout: time.Millisecond * time.Duration(5000),
 				}
-				return d.DialContext(ctx, pro, dnslist[i]+":53")
+				return d.DialContext(ctx, pro, dnsserver+":53")
 			}
 
 			if addrs, err = r.LookupHost(context.Background(), domain); err == nil {
@@ -160,11 +160,45 @@ func ResolverDomain(domain string, debugflag ...bool) (addrs []string, err error
 			}
 
 			if len(debugflag) != 0 && debugflag[0] {
-				log.Errorf("\nCan not used dns server %s for finding %s\n", dnslist[i], domain)
+				log.Errorf("\nCan not used dns server %s for finding %s\n", dnsserver, domain)
 			}
 		}
 	}
 	return net.LookupHost(domain) //system lockup
+}
+
+func ResolverDomainOld(domain string, debugflag ...bool) (addrs []string, err error) {
+	if addr := net.ParseIP(domain); addr != nil {
+		return []string{domain}, nil
+	}
+
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			for i := 0; i < len(dnslist); i++ {
+				for _, pro := range []string{"udp", "tcp"} {
+					d := net.Dialer{
+						Timeout: time.Millisecond * time.Duration(5000),
+					}
+					conn, err := d.DialContext(ctx, pro, dnslist[i]+":53")
+					if err == nil {
+						return conn, nil
+					}
+					if len(debugflag) != 0 && debugflag[0] {
+						log.Errorf("\nCan not used dns server %s for finding %s\n", dnslist[i], domain)
+					}
+				}
+			}
+			return nil, err
+		},
+	}
+
+	addrs, err = r.LookupHost(context.Background(), domain)
+	if err != nil {
+		return net.LookupHost(domain)
+	}
+
+	return addrs, nil
 }
 
 func ResolverDomain2Ip4(domain string, debugflag ...bool) (addr string, err error) {
@@ -228,52 +262,28 @@ func NetCheckConectionToServer(domain string, ifacenames ...string) error {
 	}
 }
 
-func ServerIsLive(domain string, ifacenames ...string) bool {
-	tcpAddr := &net.TCPAddr{}
+func NetWaitServerIsOnline(domain string, timeout time.Duration, ifacenames ...string) error {
+	startTime := time.Now()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
 
-	if len(ifacenames) != 0 {
-		ip4add, err := NetGetInterfaceIpv4Addr(ifacenames[0])
-		if err != nil || len(ip4add) == 0 {
-			return false
-		} else {
-			tcpAddr.IP = net.ParseIP(ip4add)
+	for {
+		select {
+		case <-ticker.C:
+			if err := NetCheckConectionToServer(domain, ifacenames...); err == nil {
+				return nil
+			}
+			if time.Since(startTime) >= timeout {
+				return fmt.Errorf("timeout waiting for server to become online")
+			}
+		case <-time.After(timeout):
+			return fmt.Errorf("timeout waiting for server to become online")
 		}
-	} else {
-		tcpAddr = nil
 	}
+}
 
-	d := net.Dialer{LocalAddr: tcpAddr, Timeout: time.Millisecond * 666}
-
-	if !strings.Contains(domain, "://") {
-		domain = "http://" + domain
-	}
-	u, err := url.Parse(domain)
-	if err != nil {
-		return false
-	}
-	port := "80"
-	if u.Scheme == "https" {
-		port = "443"
-	}
-
-	host := u.Host
-	if thost, tport, _ := net.SplitHostPort(u.Host); len(thost) != 0 {
-		port = tport
-		host = thost
-	}
-	ip4, err := ResolverDomain2Ip4(host)
-	if err != nil {
-		//		log.Error(err, host)
-
-		return false
-	}
-	if conn, err := d.Dial("tcp", ip4+":"+port); err != nil {
-		//		log.Error(err)
-		return false
-	} else {
-		conn.Close()
-		return true
-	}
+func ServerIsLive(domain string, ifacenames ...string) bool {
+	return nil == NetCheckConectionToServer(domain, ifacenames...)
 }
 
 func NetIsOnlineTcp(times, intervalsecs int, ifacenames ...string) bool {
@@ -342,8 +352,8 @@ func NetIsOnlinePing(times, intervalsecs int, ifacenames ...string) bool {
 }
 
 func PingExternal(domain, ifacename string, timeout time.Duration) error {
-	cmd := fmt.Sprintf("ping -c 1 -I %s  %s", ifacename, domain)
-	_, _, err := sexec.ExecCommandShell(cmd, timeout)
+	// cmd := fmt.Sprintf("ping -c 1 -I %s  %s", ifacename, domain)
+	_, _, err := sexec.ExecCommandTimeout("ping", timeout, "-c", "1", "-I", ifacename, domain)
 	return err
 }
 
@@ -382,7 +392,7 @@ func NetIsOnlinePingExternal(times, intervalsecs int, ifacenames ...string) bool
 }
 
 func IfaceIsPluged(ifacename string) bool {
-	if retbyte, err := ioutil.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", ifacename)); err == nil {
+	if retbyte, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", ifacename)); err == nil {
 		retstr := string(retbyte)
 		retstr = sutils.StringTrimLeftRightNewlineSpace(retstr)
 		if retstr == "1" {
@@ -591,45 +601,250 @@ func NetGetStaticMac() string {
 	}
 }
 
+func NetGetGatewayOfInterface(ifaceCheck string) (string, error) {
+	if up, e := NetInterfaceIsUp(ifaceCheck); !up {
+		if e == nil {
+			e = fmt.Errorf("iface is not up")
+		}
+		return "", e
+	}
+
+	cmd := exec.Command("ip", "route", "show", "dev", ifaceCheck)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	minMetric := -1
+	var gateway string
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "default" {
+			viaIndex := -1
+			for i := 0; i < len(fields); i++ {
+				if fields[i] == "via" {
+					viaIndex = i
+					break
+				}
+			}
+			if viaIndex != -1 && viaIndex <= len(fields)-2 {
+				gateway = fields[viaIndex+1]
+				for i := 0; i < len(fields); i++ {
+					if i == viaIndex+2 {
+						break
+					}
+					if fields[i] == "metric" {
+						metric, err := strconv.Atoi(fields[i+1])
+						if err != nil {
+							return "", err
+						}
+						if minMetric == -1 || metric < minMetric {
+							minMetric = metric
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if gateway == "" && sexec.LookPath("dhclient") != "" {
+		if _, output, err := sexec.ExecCommandEnvTimeout("dhclient", nil, time.Second*3, "-d", "-v", ifaceCheck); err == nil {
+			dhcpcinfo := string(output)
+			lines := strings.Split(dhcpcinfo, "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "DHCPACK") {
+					gatewayIP := strings.TrimPrefix(strings.Fields(line)[2], "from ")
+					if gatewayIP != "" {
+						return gatewayIP, nil
+					}
+				} else if strings.Contains(line, "new_routers") {
+					fields := strings.Fields(line)
+					if len(fields) > 1 {
+						return fields[1], nil
+					}
+				}
+			}
+		}
+	}
+	return gateway, nil
+}
+
+func NetInterfaceIsUp(ifaceName string) (bool, error) {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return false, err
+	}
+	return iface.Flags&net.FlagUp != 0, nil
+}
+
+func NetRouteAdd(iface string, metric int, cirdOrIp string) (cmd2run string, err error) {
+	var currMetric int
+	if cirdOrIp == "" {
+		cirdOrIp = "default"
+	}
+	currMetric, err = NetGetMetricOfInterface(iface, cirdOrIp)
+	if err != nil && currMetric != -1 {
+		// cmd2run = fmt.Sprintf("%d, %v = NetGetMetricOfInterface", currMetric, err)
+		return
+	}
+
+	var gateway string
+	gateway, err = NetGetGatewayOfInterface(iface)
+	if err != nil {
+		// cmd2run = fmt.Sprintf("%d, %v = NetGetGatewayOfInterface", gateway, err)
+		return
+	}
+	args := []string{"route"}
+
+	args = append(args, "add", cirdOrIp)
+
+	if gateway != "" {
+		args = append(args, "via", gateway)
+	}
+
+	if currMetric != -1 {
+		if currMetric <= metric {
+			return
+		}
+		args = append(args, "metric", fmt.Sprintf("%d", metric))
+	}
+
+	if iface != "" {
+		args = append(args, "dev", iface)
+	}
+
+	cmd := exec.Command("ip", args...)
+	cmd2run = strings.Join(append([]string{"ip"}, args...), " ")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf(stderr.String()))
+	}
+	return
+}
+
+func NetGetMetricOfInterface(ifaceCheck string, cirdOrIp string) (int, error) {
+	if up, e := NetInterfaceIsUp(ifaceCheck); !up {
+		if e == nil {
+			e = fmt.Errorf("iface is not up")
+		}
+		return -1, e
+	}
+
+	cmd := exec.Command("ip", "route", "show", "dev", ifaceCheck)
+	out, err := cmd.Output()
+	if err != nil {
+		return -1, err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	minMetric := 0
+	flagDefault := false
+	if cirdOrIp == "" {
+		cirdOrIp = "default"
+	}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == cirdOrIp {
+			flagDefault = true
+			metricIndex := -1
+			for i := 0; i < len(fields)-1; i++ {
+				if fields[i] == "metric" {
+					metricIndex = i
+					break
+				}
+			}
+			if metricIndex != -1 && metricIndex < len(fields)-1 {
+				metric, err := strconv.Atoi(fields[metricIndex+1])
+				if err != nil {
+					return 0, err
+				}
+				if metric < minMetric {
+					minMetric = metric
+				}
+			} else {
+				return 0, nil
+			}
+		}
+	}
+	if !flagDefault {
+		return -1, fmt.Errorf("no route to check")
+	}
+	return minMetric, nil
+}
+
 func RouteTem(ifacename string, metrics ...int) (err error) {
 	metric := 185
 	if len(metrics) != 0 {
 		metric = metrics[0]
 	}
-	if !NetIfaceHasIpv4(ifacename) {
-		return fmt.Errorf("can not get ipv4 %s", ifacename)
+	cmd := ""
+	cmd, err = NetRouteAdd(ifacename, metric, "default")
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf("[%s]", cmd))
 	}
-	gwip, _ := NetGetDefaultGatewayOfIface(ifacename)
-	if _, stderr, err := sexec.ExecCommandShell(fmt.Sprintf(`iface=%s;
-	        metric=%d;
-			gwip=%s
-
-			einfo=$(route -n | grep -e '^0.0.0.0' | grep ${iface} | sort -r -u -k2  |  head -n 1)
-			egw=$(echo -n "${einfo}" | awk '{print $2}')
-
-			for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
-			  ((i == 2021)) && exit 0
-			  ((i <= metric)) && exit 0
-			done
-			[[ $gwip ]] && { [[ $gwip =~ "0.0.0.0" ]] || gw="gw ${gwip}"; } || gw=""
-			[[ $gw ]] || {
-			    [[ $egw ]] && { [[ $egw =~ "0.0.0.0" ]] || gw="gw ${egw}"; }
-			}
-			ip link show ${iface} | grep -Poe 'state\s+[^\s]+' | grep -ie UP -e UNKNOWN && \
-			route add default metric ${metric} ${gw} dev ${iface}
-			route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, metric, gwip), time.Second*5); err == nil {
-		return nil
-	} else {
-		return fmt.Errorf("%s", string(stderr))
-	}
+	return
 }
 
-func RouteDel(ifacename string, metrics ...int) {
+func NetRouteAddTemporary(iface string, metric int, cirdOrIp string) (err error) {
+	_, err = NetRouteAdd(iface, metric, cirdOrIp)
+	return
+}
 
+func NetRouteDelete(iface string, metric int, cirdOrIp string) (cmd2run string, err error) {
+	var currMetric int
+	if cirdOrIp == "" {
+		cirdOrIp = "default"
+	}
+	currMetric, err = NetGetMetricOfInterface(iface, cirdOrIp)
+	if currMetric == -1 {
+		return "", nil
+	}
+
+	if err != nil {
+		return
+	}
+
+	if metric >= 0 && currMetric != metric {
+		return
+	}
+
+	var gateway string
+	gateway, err = NetGetGatewayOfInterface(iface)
+	if err != nil {
+		return
+	}
+	args := []string{"route"}
+
+	args = append(args, "del", cirdOrIp)
+
+	if gateway != "" {
+		args = append(args, "via", gateway)
+	}
+
+	if metric >= 0 {
+		args = append(args, "metric", fmt.Sprintf("%d", metric))
+	}
+
+	if iface != "" {
+		args = append(args, "dev", iface)
+	}
+
+	cmd := exec.Command("ip", args...)
+	cmd2run = strings.Join(append([]string{"ip"}, args...), " ")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf(stderr.String()))
+	}
+	return
 }
 
 func GetIfaceRouteDefault() (ifacename string) {
-	cmd := `route -n | grep -e '^0.0.0.0' | sort -u -k5 -g | head -n 1 | grep -Poe '[^\s]+$'`
+	cmd := `ip route get 7.7.7.7 | awk '{for (i=1; i<=NF; i++) if ($i == "dev") print $(i+1)}'`
 	if stdou, _, err := sexec.ExecCommandShell(cmd, time.Millisecond*200); err != nil {
 		return ""
 	} else {
@@ -638,54 +853,16 @@ func GetIfaceRouteDefault() (ifacename string) {
 }
 
 func RouteDefault(ifacename string, metrics ...int) (err error) {
-	mt := 50
+	metric := 0
 	if len(metrics) != 0 {
-		mt = metrics[0]
+		metric = metrics[0]
 	}
-
-	cmd := fmt.Sprintf(`iface=%s
-	        metric=%d
-
-	        for i in $(route -n | grep -e '^0.0.0.0' | grep ${iface} | awk '{print $5}'); do
-			  ((i <= metric)) && exit 0
-			done
-
-			deinfo=$(route -n | grep -e '^0.0.0.0' | grep -v ${iface} | sort -u -k5 -g | head -n 1)
-			einfo=$(route -n | grep -e '^0.0.0.0' | grep ${iface} | sort -r -u -k2  |  head -n 1)
-			gw=$(echo -n "${einfo}" | awk '{print $2}')
-			gm=$(echo -n "${einfo}" | awk '{print $3}')
-			mt=$(echo -n "${einfo}" | awk '{print $5}')
-
-			dif=$(echo -n "${deinfo}" | awk '{print $8}')
-
-			[[ $dif ]] && {
-
-   			[[ ${dif} =~ ${iface} ]] || {
-	   		   dgw=$(echo -n "${deinfo}" | awk '{print $2}')
-		   	   dgm=$(echo -n "${deinfo}" | awk '{print $3}')
-			   dmt=$(echo -n "${deinfo}" | awk '{print $5}')
-			   [[ ${dgw} =~ '0.0.0.0' ]] && dgwconf="" || dgwconf="gw ${dgw}"
-		       route del default metric ${dmt} dev ${dif}
-			   route add default metric $((metric + 10)) ${dgwconf} dev ${dif}
-			}
-
-			}
-
-			{ [[ ${gw} =~ '0.0.0.0' ]] || ! [[ ${gw} ]]; } && gwconf="" || gwconf="gw ${gw}"
-			[[ ${mt} ]] && route del default metric ${mt} dev ${iface}
-			ip link set dev ${iface}  up
-			route add default metric ${metric} ${gwconf} dev ${iface}
-			echo "Gateway default ${gwconf}"
-			route -n | grep -e '^0.0.0.0' | grep -e ${iface} | awk '{print $5}' | grep -Pe "^${metric}$"`, ifacename, mt)
-	if _, stderr, err := sexec.ExecCommandShell(cmd, time.Millisecond*2000); err != nil {
-		//		log.Printf("\nRoute command\n%s", cmd)
-		//		log.Printf("\nError output\n%s", string(stderr))
-		//		log.Printf("\nStdout\n%s", string(stdou))
-		return fmt.Errorf("%s", string(stderr))
-	} else {
-		// log.Warnf("RouteDefault cmd %s\n%s\n\nstdout:\n%s\nstderr:\n%s\n", cmd, ifacename, string(stdou), string(stderr))
-		return nil
+	cmd := ""
+	cmd, err = NetRouteAdd(ifacename, metric, "default")
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf("[%s]", cmd))
 	}
+	return
 }
 
 func GetPublicIp() string {
@@ -762,22 +939,11 @@ func Ping(addr, iface string, timeouts ...time.Duration) (*net.IPAddr, time.Dura
 			return nil, 0, fmt.Errorf("iface %s threre isnt ip4", iface)
 		}
 	}
-	//	c, err := icmp.ListenPacket("ip4:1991", listenAddr+":1991")
-	c := new(icmp.PacketConn)
-	var err error
-	if sutils.GOOS != "windows" {
-		c, err = icmp.ListenPacket("udp4", listenAddr)
-	} else {
-		c, err = icmp.ListenPacket("ip4:icmp", listenAddr)
-	}
-
-	if err != nil {
-		return nil, 0, err
-	}
-	defer c.Close()
 
 	// Resolve any DNS (if used) and get the real IP of the target
-	dstip4, err := ResolverDomain2Ip4(addr)
+	var err error
+	var dstip4 string
+	dstip4, err = ResolverDomain2Ip4(addr)
 	if err != nil {
 		//		panic(err)
 		return nil, 0, err
@@ -788,6 +954,26 @@ func Ping(addr, iface string, timeouts ...time.Duration) (*net.IPAddr, time.Dura
 		//		panic(err)
 		return nil, 0, err
 	}
+	if listenAddr != "0.0.0.0" && !IpIsPrivate(listenAddr) {
+		if _, e := exec.LookPath("ping"); e == nil {
+			start := time.Now()
+			return dst, time.Since(start), PingExternal(addr, iface, timeout)
+		}
+	}
+	//	c, err := icmp.ListenPacket("ip4:1991", listenAddr+":1991")
+	c := new(icmp.PacketConn)
+	c, err = icmp.ListenPacket("ip4:icmp", listenAddr)
+	// if sutils.GOOS != "windows" {
+	// 	c, err = icmp.ListenPacket("udp4", listenAddr)
+	// } else {
+	// 	c, err = icmp.ListenPacket("ip4:icmp", listenAddr)
+	// }
+
+	if err != nil {
+		return nil, 0, err
+	}
+	defer c.Close()
+
 	// Make a new ICMP message
 	m := icmp.Message{
 		Type: ipv4.ICMPTypeEcho, Code: 0,
@@ -970,7 +1156,12 @@ func GetDefaultIface() (string, error) {
 	return NetGetInameByIP(LanIP)
 }
 
-//infotype 0 interface name, 1 macaddr, 2 cidr, >2 lanip]
+// func GetDefaultDns() (string, err error) {
+// 	// resolvConfig, _ := net.LookupConfig("")
+// 	// fmt.Println(resolvConfig.Servers[0])
+// }
+
+// infotype 0 interface name, 1 macaddr, 2 cidr, >2 lanip]
 func NetGetInterfaceInfo(infotype int, ifaces ...string) (info string, err error) {
 	// get all the system's or local machine's network interfaces
 	ifname := ""
@@ -1143,21 +1334,20 @@ func NetIsIpv4(ip net.IP) bool {
 func NetTCPClientSend(servAddr string, dataSend []byte, timeouts ...time.Duration) (retbytes []byte, err error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", servAddr)
 	if err != nil {
-		log.Error("ResolveTCPAddr failed:", err.Error())
+		// log.Error("ResolveTCPAddr failed:", err.Error())
 		return retbytes, err
 	}
 
 	var conn *net.TCPConn
-	if len(timeouts) != 0 {
-		// conn, err = net.DialTCP("tcp", tcpAddr, timeouts[0])
-	} else {
-		conn, err = net.DialTCP("tcp", nil, tcpAddr)
-	}
+	conn, err = net.DialTCP("tcp", nil, tcpAddr)
+
 	if err != nil {
-		log.Error("Dial failed:", err.Error())
+		// log.Error("Dial failed:", err.Error())
 		return retbytes, err
 	}
-
+	if len(timeouts) != 0 {
+		conn.SetDeadline(time.Now().Add(timeouts[0]))
+	}
 	defer conn.Close()
 
 	_, err = conn.Write(dataSend)
@@ -1170,9 +1360,9 @@ func NetTCPClientSend(servAddr string, dataSend []byte, timeouts ...time.Duratio
 	reply := make([]byte, 1024)
 
 	n, err := conn.Read(reply)
-	if err != nil {
-		log.Error("Write to server failed:", err.Error())
-	}
+	// if err != nil {
+	// 	log.Error("Write to server failed:", err.Error())
+	// }
 	return reply[:n], err
 }
 
@@ -1288,7 +1478,7 @@ func IpDhcpRenew(ifi string, timeouts ...time.Duration) error {
 	if len(timeouts) != 0 {
 		timeout = timeouts[0]
 	}
-	cmd2run := fmt.Sprintf("dhclient  %s", ifi)
+	cmd2run := fmt.Sprintf("dhclient -d %s", ifi)
 	if _, errstd, err := sexec.ExecCommandShell(cmd2run, timeout); err == nil {
 		return nil
 	} else {
@@ -1369,12 +1559,12 @@ func IpConfigAuto(ipcidr string, ifaces ...string) error {
 			gw := net.IP(ipgw).String()
 
 			if err := IpConfig(ip.String(), mask, gw, ifaces...); err == nil {
-				//			fmt.Println("Cheking ", ip.String(), ipgw)
+				//			log.Println("Cheking ", ip.String(), ipgw)
 				if mac, err := arp.PingMac(ipgw, ifi, time.Millisecond*85); err == nil {
-					fmt.Printf("Gateway %s Mac -> %s", ipgw, mac)
+					log.Printf("Gateway %s Mac -> %s", ipgw, mac)
 					for j := 2; j < len(ips); j++ {
 						ipcheck := ips[j]
-						fmt.Println("checking ", ipcheck.String(), ip.String(), ipgw)
+						log.Println("checking ", ipcheck.String(), ip.String(), ipgw)
 						if ipcheck.String() == ip.String() {
 							continue
 						}
@@ -1707,14 +1897,15 @@ func NetDiscoveryQueryCCC(servicename string, ifaceName ...string) (deviceList [
 				sig.IP = entry.Ip4
 				sig.Port = entry.Port
 				netry := len(entry.Info)
-				if netry >= 3 {
+				if netry >= 2 {
 					// if (netry >= 3) && (entry.Info[netry-1] == sig.IP) {
 					sig.Serial_number = entry.Info[0]
 					sig.Device_id = entry.Info[1]
 					sig.From = iface
 					sig.Extra = []string{}
-					if netry >= 4 {
-						sig.Extra = entry.Info[2:(netry - 1)]
+					if netry >= 3 {
+						sig.Extra = entry.Info[2:netry]
+						sig.Version = entry.Info[netry-1]
 					}
 					sig.LastDiscovery = time.Now()
 					lockwrire.Lock()
@@ -1811,9 +2002,24 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 					if urn == nil {
 						continue
 					}
+					cam := CamerasInfo{}
+					cam.IP = sregexp.New(`([0-9]+\.){3}[0-9]+`).FindString(endpoints.Text())
+
 					uuid := urn.Text()
 					uuid = sregexp.New(`[^:]+$`).FindString(uuid)
+					if uuid == "" {
+						uuid = cam.IP
+						uuid = strings.ReplaceAll(uuid, ".", "")
+						ifi, _ := net.InterfaceByName(iface)
+						ipgw := net.ParseIP(cam.IP)
+						if mac, err := arp.PingMac(ipgw, ifi, time.Millisecond*85); err == nil {
+							uuid = mac
+							uuid = strings.ReplaceAll(uuid, ":", "")
+						}
+					}
 					uuid = strings.ReplaceAll(sregexp.New(`[^:]+$`).FindString(uuid), "-", "")
+
+					cam.UUID = uuid
 					flag := false
 
 					for _, v := range cameralist {
@@ -1825,13 +2031,8 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 					if flag {
 						continue
 					}
-					flag = false
 
-					cam := CamerasInfo{}
-					cam.UUID = uuid
 					cam.XADDR = sregexp.New(`[^\s]+([0-9]+\.){3}[0-9]+[^\s]+`).FindString(endpoints.Text())
-
-					cam.IP = sregexp.New(`([0-9]+\.){3}[0-9]+`).FindString(endpoints.Text())
 
 					if vs := sregexp.New(`onvif:\/\/www\.onvif\.org\/name\/([^\s]+)`).FindStringSubmatch(scopes.Text()); len(vs) != 0 {
 						cam.Name = vs[1]
@@ -1845,10 +2046,7 @@ func OnvifDiscovery(ifaceName ...string) []CamerasInfo {
 						cam.Location = vs[1]
 					}
 
-					if flag {
-						continue
-					}
-					//					log.Println("Device: ", uuid)
+					//log.Println("Device: ", uuid)
 
 					cam.From = iface
 					lockwrire.Lock()
@@ -1931,22 +2129,58 @@ func IsPortOpen(addr string, port int, proto string, timeouts ...time.Duration) 
 	return false
 }
 
-func IsPortAvailable(ip string, port int, timeouts ...time.Duration) bool {
-	if IsPortOpen(ip, port, "tcp", timeouts...) {
+func IsPortOpen1(addr string, port int, proto string, timeouts ...time.Duration) bool {
+	if len(proto) == 0 {
+		proto = "tcp"
+	}
+
+	if proto == "tcp" {
+		addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", addr, port))
+
+		if err != nil {
+			return false
+		}
+		l, err := net.ListenTCP("tcp", addr)
+		// fmt.Println("======================format string", addr, err)
+		if err != nil {
+			return true
+		}
+		l.Close()
+		// return false
+	} else if proto == "udp" {
+		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", addr, port))
+		if err != nil {
+			return false
+		}
+
+		l, err := net.ListenUDP("udp", addr)
+		if err != nil {
+			return true
+		}
+		l.Close()
+		// return false
+	} else {
 		return true
 	}
-	if IsPortOpen(ip, port, "udp", timeouts...) {
+	return false
+}
+
+func IsPortAvailable(ip string, port int, timeouts ...time.Duration) bool {
+	if !IsPortOpen(ip, port, "tcp", timeouts...) {
+		return true
+	}
+	if !IsPortOpen(ip, port, "udp", timeouts...) {
 		return true
 	}
 	return false
 }
 
 func IsPortTcpAvailable(ip string, port int, timeouts ...time.Duration) bool {
-	return IsPortOpen(ip, port, "tcp", timeouts...)
+	return !IsPortOpen(ip, port, "tcp", timeouts...)
 }
 
 func IsPortUdpAvailable(ip string, port int, timeouts ...time.Duration) bool {
-	return IsPortOpen(ip, port, "udp", timeouts...)
+	return !IsPortOpen(ip, port, "udp", timeouts...)
 }
 
 func IsPortUsed(ip string, port int, timeouts ...time.Duration) bool {
