@@ -26,7 +26,7 @@ import (
 	"golang.org/x/net/ipv4"
 
 	"github.com/sonnt85/gonmmm"
-	wsdiscovery "github.com/sonnt85/gonvif/ws-discovery"
+	"github.com/sonnt85/gonvif/wsdiscovery"
 	"github.com/sonnt85/gosutils/sexec"
 	"github.com/sonnt85/gosutils/sregexp"
 	"github.com/sonnt85/gosutils/sutils"
