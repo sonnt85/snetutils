@@ -1,5 +1,7 @@
 # snetutils
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/sonnt85/snetutils.svg)](https://pkg.go.dev/github.com/sonnt85/snetutils)
+
 Network utility library for Go — interface management, connectivity checks, DNS resolution, port scanning, mDNS/ONVIF discovery, NTP, REST API response helpers, and more.
 
 ## Installation
@@ -66,6 +68,12 @@ resp := snetutils.HABuildSuccessResponeStr(result, nil)
 
 ## API
 
+### Types
+
+- `type DiscoveryInfo struct` — mDNS discovery result (host, port, info fields, IP addresses)
+- `type DeviceCCCInfo struct` — CCC device discovery result (IP, port, device metadata)
+- `type CamerasInfo struct` — ONVIF camera discovery result (device URL, XAddrs, scopes)
+
 ### Interface & Address
 - `NetGetInterfaceIpv4Addr(iface) (string, error)` — interface IPv4
 - `NetGetMac/NetGetMacs(iface...)` — interface MAC address(es)
@@ -74,6 +82,8 @@ resp := snetutils.HABuildSuccessResponeStr(result, nil)
 - `NetInterfaceIsUp(iface) (bool, error)` — interface state
 - `NetGetStaticMac() string` — stable MAC (loopback/first-up interface)
 - `IfaceGetAllName(noLocalhost...)` — list all interface names
+- `IfaceIsPluged(ifacename string) bool` — check if network interface has a carrier (cable plugged in)
+- `IfaceRestart(ifacename string) bool` — bring interface down then up
 - `GetOutboundIP/GetDefaultIface()` — outbound address and default interface
 - `NetGetInterfaceInfo(infotype int, ifaces...)` — generic interface info by type constant
 
@@ -90,12 +100,17 @@ resp := snetutils.HABuildSuccessResponeStr(result, nil)
 - `NetIsOnline/NetIsOnlineTcp/NetIsOnlinePing(tries, interval, ifaces...)` — connectivity test
 - `NetWaitServerIsOnline(domain, timeout, ifaces...)` — block until reachable
 - `ServerIsLive(domain, ifaces...)` — single connectivity check
-- `Ping(addr, iface, timeout) (*net.IPAddr, time.Duration, error)` — ICMP ping
-- `PingExternal(domain, iface, timeout) error` — system ping command
-- `IsSsh/IsVnc(addr, timeout...)` — protocol detection
+- `Ping(addr, iface string, timeouts ...time.Duration) (*net.IPAddr, time.Duration, error)` — ICMP ping (timeout is variadic, default 1s)
+- `PingExternal(domain, iface string, timeout time.Duration) error` — system ping command
+- `IsSsh/IsVnc(addr string, timeouts ...time.Duration)` — protocol detection
+- `NetTCPClientSend(servAddr string, dataSend []byte, timeouts ...time.Duration) ([]byte, error)` — send data to a TCP server and receive a response
 
 ### Port
-- `IsPortOpen/IsPortTcpAvailable/IsPortUdpAvailable(ip, port, timeouts...)` — availability checks
+- `IsPortOpen(addr string, port int, proto string, timeouts ...time.Duration) bool` — check if a TCP/UDP port is open
+- `IsPortAvailable(ip string, port int, timeouts ...time.Duration) bool` — check if a TCP port is available (not in use)
+- `IsPortUsed(ip string, port int, timeouts ...time.Duration) bool` — check if a TCP port is in use
+- `IsPortTcpAvailable/IsPortTcpUsed(ip string, port int, timeouts ...time.Duration) bool` — TCP-specific variants
+- `IsPortUdpAvailable/IsPortUdpUsed(ip string, port int, timeouts ...time.Duration) bool` — UDP-specific variants
 - `GetFreeTcpPort/GetFreeUdpPort() (int, error)` — allocate free port
 - `GetFreePorts/GetFreeTcpPorts/GetFreeUdpPorts(count int)` — allocate multiple ports
 
@@ -108,15 +123,20 @@ resp := snetutils.HABuildSuccessResponeStr(result, nil)
 
 ### Discovery
 - `NetInitDiscoveryServer(...)` — register mDNS service
-- `NetDiscoveryQuery(service, timeout, ifaces...)` — mDNS browse
-- `NetDiscoveryQueryCCC(service, ifaces...)` — discover CCC devices
-- `OnvifDiscovery(ifaces...) []CamerasInfo` — ONVIF camera discovery
+- `NetDiscoveryQuery(service string, timeout time.Duration, ifaces ...string) []*DiscoveryInfo` — mDNS browse, returns typed results
+- `NetDiscoveryQueryCCC(service string, ifaces ...string) []DeviceCCCInfo` — discover CCC devices
+- `OnvifSendProbe(ifaceName ...string) []string` — send WS-Discovery probe and return raw ONVIF device URLs
+- `OnvifDiscovery(ifaces ...string) []CamerasInfo` — full ONVIF camera discovery with device metadata
 - `MacFromIP(ip, ifaces...) (string, error)` — ARP lookup
+- `NMConnectWifi(ifacename, ssid, password string) error` — connect to Wi-Fi via NetworkManager
+- `NMCreateHostPost(ifacename, conname, ssid, password string) error` — create a Wi-Fi hotspot via NetworkManager
 
 ### Network Time
-- `GetNetworkTime(ntpserver, port) (*time.Time, error)` — NTP query
+- `GetNetworkTime(ntpserver string, port int) (*time.Time, error)` — NTP query
+- `TimeZoneGet() string` — get current system timezone name
 - `TimeGetUTCFromInternet() string` — NTP then HTTP fallback
-- `TimeUpdateFromInternet(tzone...) bool` — sync system clock
+- `TimeUpdateFromInternet(tzone ...string) bool` — sync system clock
+- `GetPublicIp() string` — retrieve public (WAN) IP address via external service
 
 ### REST API Builders
 - `HABuildErrorCode(code, msg) HAErrorCode`
