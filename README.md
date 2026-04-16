@@ -124,6 +124,10 @@ resp := snetutils.HABuildSuccessResponeStr(result, nil)
 - `HABuildSuccessRespone(result, messages, resultInfo...) *HASuccessResponse`
 - `HABuildErrorResponseStr/HABuildSuccessResponeStr(...)` — JSON string variants
 
+## Author
+
+**sonnt85** — [thanhson.rf@gmail.com](mailto:thanhson.rf@gmail.com)
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
